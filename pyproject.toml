@@ -33,6 +33,7 @@ dependencies = [
   "torch",
   "pytorch-tcn",
   "scipy",
+  "bleak>=0.21.0",
 ]
 
 [project.urls]

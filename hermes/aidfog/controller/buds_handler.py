@@ -1,23 +1,27 @@
+"""
+HERMES Handler for PineBuds Pro audio cueing.
+
+Runs in a background process. Manages BLE connection to the earbuds and
+processes cueing commands received from the Pipeline via a multiprocessing Queue.
+"""
+
 import asyncio
-from multiprocessing import Process
-from multiprocessing.sharedctypes import Synchronized
+import logging
 from multiprocessing.synchronize import Event as _Event
 from queue import Queue, Empty
-import can
-import numpy as np
-from collections import deque
-from dataclasses import fields
 
 from hermes.utils.time_utils import get_time, init_time
-from hermes.utils.mp_utils import launch_handler
+
+from .buds_facade import BudsBleBackend
+from ..utils.types import CueingConfig, DEFAULT_DEVICE_NAME
+
+logger = logging.getLogger(__name__)
 
 
 class BudsHandler:
     def __init__(
         self,
-        niclas: dict,
-        nicla_data_queue: "Queue[tuple[str, float, NiclaData]]",
-
+        buds: dict,
         ref_time_s: float,
         is_ready_event: _Event,
         is_keep_data_event: _Event,
@@ -25,13 +29,16 @@ class BudsHandler:
         is_cleanup_event: _Event,
         is_finished_event: _Event,
         input_queue: "Queue[tuple[float, str]]",
+        cueing_command_queue: "Queue[dict]",
+        cueing_status_queue: "Queue[tuple[float, int]]",
         dt: float = 0.01,
     ):
         self._ref_time_s = ref_time_s
         self._dt = dt
 
-        ##### Inter-process communication related variables.
         self._input_queue = input_queue
+        self._cueing_command_queue = cueing_command_queue
+        self._cueing_status_queue = cueing_status_queue
 
         self._is_ready_event = is_ready_event
         self._is_keep_data_event = is_keep_data_event
@@ -39,126 +46,92 @@ class BudsHandler:
         self._is_cleanup_event = is_cleanup_event
         self._is_finished_event = is_finished_event
 
-        ##### Nicla Sense ME related variables.
-        nicla_mapping: dict[str, dict] = niclas["device_mapping"]
-        self._nicla_name_mapping = ExoNiclaMapping(
-            **dict(zip(nicla_mapping.keys(), nicla_mapping.keys()))
-        )  # validates input mapping.
-        self._nicla_latest_data: dict[str, deque[NiclaData]] = dict(
-            map(
-                lambda field: (field.name, deque(maxlen=2)),
-                fields(self._nicla_name_mapping),
-            )
-        )
-        self._offsets: dict[str, float] = dict(
-            map(lambda field: (field.name, 0.0), fields(self._nicla_name_mapping))
-        )
-        self._offsets_lock = asyncio.Lock()
+        device_name = buds.get("device_name", DEFAULT_DEVICE_NAME)
+        address = buds.get("address", None)
 
-        self._nicla_backend = NiclaBleBackend(
-            niclas=niclas,
-            nicla_latest_data=self._nicla_latest_data,
-            nicla_data_queue=nicla_data_queue,
-            is_keep_data_event=is_keep_data_event,
-            is_stop_new_data_event=is_stop_new_data_event,
-            is_cleanup_event=is_cleanup_event,
+        self._buds_backend = BudsBleBackend(
+            device_name=device_name,
+            address=address,
         )
 
-    async def _measure_offsets(self, duration: float = 2.0) -> None:
-        """Measure average torso, thigh, and knee offsets over given seconds."""
-
-        print("Measuring offsets... Please stand still.", flush=True)
-
-        samples = dict(
-            map(lambda field: (field.name, []), fields(self._nicla_name_mapping))
-        )
-
-        end_s = asyncio.get_event_loop().time() + duration
-        while asyncio.get_event_loop().time() < end_s:
+    async def _process_commands(self):
+        """Poll the command queue and forward cueing commands to the earbud."""
+        loop = asyncio.get_event_loop()
+        while not self._is_cleanup_event.is_set():
             try:
-                for device_name, device_data in self._nicla_latest_data.items():
-                    samples[device_name].append(
-                        wrap_angle(device_data[-1].euler[0], 90)
-                    )
-            except (KeyError, IndexError) as e:
-                print(
-                    f"Error getting offset sample for {device_name}:\n", e, flush=True
+                cmd = await loop.run_in_executor(
+                    None, self._cueing_command_queue.get, True, 0.1
                 )
-                await asyncio.sleep(self._dt)
+            except Empty:
                 continue
+            except Exception as e:
+                logger.error("Command queue error: %s", e)
+                continue
+
+            action = cmd.get("action", "").lower()
+            if action == "start":
+                await self._buds_backend.start_cue(
+                    tone_id=cmd.get("tone_id", 0),
+                    volume=cmd.get("volume", 80),
+                )
+            elif action == "stop":
+                await self._buds_backend.stop_cue()
+            elif action == "configure":
+                config = CueingConfig(
+                    tone_id=cmd.get("tone_id", 0),
+                    volume=cmd.get("volume", 80),
+                    duration_ms=cmd.get("duration_ms", 500),
+                    burst_count=cmd.get("burst_count", 1),
+                    burst_gap_ms=cmd.get("burst_gap_ms", 0),
+                )
+                await self._buds_backend.configure(config)
+
+            if (
+                self._is_keep_data_event.is_set()
+                and not self._is_stop_new_data_event.is_set()
+            ):
+                toa_s = get_time()
+                self._cueing_status_queue.put(
+                    (toa_s, self._buds_backend.current_status)
+                )
+
+    async def _watch_status(self):
+        """Periodically read earbud status and push to the status queue."""
+        while not self._is_cleanup_event.is_set():
+            if self._buds_backend.is_connected:
+                status = self._buds_backend.current_status
+                if (
+                    self._is_keep_data_event.is_set()
+                    and not self._is_stop_new_data_event.is_set()
+                ):
+                    toa_s = get_time()
+                    self._cueing_status_queue.put((toa_s, status))
             await asyncio.sleep(self._dt)
 
-        async with self._offsets_lock:
-            print("Offsets measured:", flush=True)
-            for device_name, device_samples in samples.items():
-                self._offsets[device_name] = np.mean(device_samples)
-                print(f"{device_name}: {self._offsets[device_name]:.2f}")
-
-    async def _watch_for_offset_recalibration(self):
-        while not self._is_cleanup_event.is_set():
-            await self._recv_calibration_trigger()
-            await asyncio.sleep(5)
-
-    async def _recv_calibration_trigger(self) -> bool:
-        loop = asyncio.get_event_loop()
-        try:
-            toa_s, user_input = await loop.run_in_executor(
-                None,
-                self._input_queue.get,
-                True,
-                0.1
-            )
-            if user_input == "m":
-                await self._measure_offsets()
-                return True
-        except Empty:
-            pass
-        except Exception as e:
-            print(f"Failed to connect: {e}", flush=True)
-
-    async def _run(self):
-        next_period_s = get_time()
-        while not self._is_cleanup_event.is_set():
-            next_period_s += self._dt
-            # TODO: do smth useful
-
-            end_time_s = get_time()
-            if (sleep_s := next_period_s - end_time_s) > 0:
-                await asyncio.sleep(sleep_s)
-
     async def _cleanup(self) -> None:
-        print("Cleaning up Buds.", flush=True)
+        logger.info("Cleaning up BudsHandler.")
+        await self._buds_backend.stop_cue()
         await self._buds_backend.cleanup()
 
     async def main(self) -> None:
-        # Initialize time utils for temporal alignment (data synchronization) with other HERMES components and networked host devices.
         init_time(ref_time=self._ref_time_s)
 
-        # 1) Connect to the Nicla Sense ME sensors.
-        await self._buds_backend.connect()
+        connected = await self._buds_backend.connect()
+        if not connected:
+            logger.error("Failed to connect to earbuds")
+            self._is_finished_event.set()
+            return
 
-        # 2) Perform initial calibration.
-        print("Press 'm' for initial offset calibration.", flush=True)
-        is_calibrated = False
-        while not is_calibrated:
-            is_calibrated = await self._recv_calibration_trigger()
-
-        # 3) Indicate to `Pipeline` that handler finished connecting and exo calibrated.
-        # NOTE: Begins streaming IMU and motor data, but stores only after upstream HERMES node triggers saving via `_is_keep_data_event` event.
+        logger.info("BudsHandler ready, signaling pipeline")
         self._is_ready_event.set()
 
-        # 4) Main working loop.
-        # NOTE: Loops until upstream HERMES node triggers closure via `_is_cleanup_event` event.
-        # TODO: Add a coroutine with `watchdog` of the motors gains file.
         await asyncio.gather(
-            self._run(),
-            self._watch_for_offset_recalibration(),
-            self._buds_backend.run(),
+            self._process_commands(),
+            self._watch_status(),
+            self._buds_backend.run(self._is_cleanup_event),
         )
-        # Indicate to `BudsPipeline` that no new data will be produced.
-        self._is_finished_event.set()
 
-        # 5) Cleanup on exit.
+        self._is_finished_event.set()
         await self._cleanup()
 
     def __call__(self) -> None:

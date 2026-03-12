@@ -1,13 +1,6 @@
-import os
-
-
-def config_can_linux(channel: str = "can0") -> None:
-    os.system(f"sudo ip link set {channel} up type can bitrate 1000000")
-    os.system(f"sudo ifconfig {channel} txqueuelen 65536")
-
-
-def wrap_angle(x, y):
-    return (x + y) % 360
+"""
+Utility functions for the PineBuds Pro audio cueing system.
+"""
 
 
 def update_running_stats(
@@ -18,6 +11,7 @@ def update_running_stats(
     min_sample: float,
     max_sample: float,
 ) -> tuple[int, float, float, float, float]:
+    """Welford's online algorithm for running mean/variance."""
     count += 1
     delta = sample - mean
     mean += delta / count
@@ -28,10 +22,23 @@ def update_running_stats(
 
 def finalize_running_stats(
     count: int, mean: float, mean2: float
-) -> tuple[int, float, float] | None:
+) -> tuple[float, float, float] | None:
+    """Finalize running stats into (mean, variance, sample_variance)."""
     if count < 2:
         return None
-    else:
-        variance = mean2 / count
-        sample_variance = mean2 / (count - 1)
-        return mean, variance, sample_variance
+    variance = mean2 / count
+    sample_variance = mean2 / (count - 1)
+    return mean, variance, sample_variance
+
+
+def compute_percentile(data: list[float], p: float) -> float:
+    """Compute the p-th percentile of a list using linear interpolation."""
+    if not data:
+        return 0.0
+    sorted_data = sorted(data)
+    k = (len(sorted_data) - 1) * (p / 100.0)
+    f = int(k)
+    c = f + 1
+    if c >= len(sorted_data):
+        return sorted_data[f]
+    return sorted_data[f] + (k - f) * (sorted_data[c] - sorted_data[f])

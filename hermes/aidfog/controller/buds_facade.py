@@ -1,180 +1,281 @@
-from abc import ABC, abstractmethod
+"""
+BLE backend for PineBuds Pro audio cueing.
+
+Manages the BLE connection lifecycle (discover, connect, reconnect, cleanup)
+and exposes async methods to send cueing commands and receive status notifications.
+Follows the same Backend pattern as the original NiclaBleBackend.
+"""
+
 import asyncio
-from collections import deque
-from multiprocessing import Queue
-from multiprocessing.synchronize import Event as _Event
+import logging
+import struct
+import time
+from typing import Optional
 
-from bleak import BleakScanner, BleakClient
-from bleak.uuids import normalize_uuid_str
-from bleak.backends.device import BLEDevice
-from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak import BleakClient, BleakScanner
+from bleak.exc import BleakError
 
-from hermes.utils.time_utils import get_time
+from ..utils.types import (
+    CUEING_SERVICE_UUID,
+    CUE_CMD_CHAR_UUID,
+    CUE_STATUS_CHAR_UUID,
+    CUE_CONFIG_CHAR_UUID,
+    CUE_CMD_START,
+    CUE_CMD_STOP,
+    CUE_CMD_CONFIGURE,
+    CUE_STATUS_IDLE,
+    CueingConfig,
+    STATUS_NAMES,
+    DEFAULT_DEVICE_NAME,
+)
 
-from ..utils.types import NiclaData, NiclaPacketMask
-
-
-class NiclaBackend(ABC):
-    @abstractmethod
-    async def connect(self):
-        pass
-
-    @abstractmethod
-    async def run(self):
-        pass
-
-    @abstractmethod
-    async def cleanup(self):
-        pass
+logger = logging.getLogger(__name__)
 
 
-class NiclaBleBackend(NiclaBackend):
+class BudsBleBackend:
+    """
+    Async BLE backend for a single PineBuds Pro earbud.
+
+    Handles discovery, connection, status notifications, and command writes.
+    Supports both name-based scanning and direct MAC address connection.
+    """
+
     def __init__(
         self,
-        niclas: dict,
-        nicla_latest_data: "dict[str, deque[NiclaData]]",
-        nicla_data_queue: "Queue[tuple[str, float, NiclaData]]",
-        is_keep_data_event: _Event,
-        is_stop_new_data_event: _Event,
-        is_cleanup_event: _Event,
+        device_name: str = DEFAULT_DEVICE_NAME,
+        address: Optional[str] = None,
+        scan_timeout: float = 10.0,
+        max_reconnect_attempts: int = 5,
+        reconnect_delay: float = 2.0,
+        reconnect_backoff: float = 1.5,
     ):
-        self._nicla_mac_mapping: dict[str, str] = niclas["device_mapping"]
-        self._nicla_latest_data = nicla_latest_data
-        self._nicla_data_queue = nicla_data_queue
-        self._service_uuid = normalize_uuid_str(niclas["service_uuid"])
-        self._char_uuid = normalize_uuid_str(niclas["char_uuid"])
-        self._discovered_devices: dict[str, BLEDevice] = {}
-        self._connected_devices: dict[str, BleakClient] = {}
-        self._disconnected_devices: dict[str, tuple[BleakClient, float]] = {}
+        self._device_name = device_name
+        self._address = address
+        self._scan_timeout = scan_timeout
+        self._max_reconnect_attempts = max_reconnect_attempts
+        self._reconnect_delay = reconnect_delay
+        self._reconnect_backoff = reconnect_backoff
 
-        self._is_keep_data_event = is_keep_data_event
-        self._is_stop_new_data_event = is_stop_new_data_event
-        self._is_cleanup_event = is_cleanup_event
+        self._client: Optional[BleakClient] = None
+        self._connected = False
+        self._current_status: int = CUE_STATUS_IDLE
+        self._status_event = asyncio.Event()
+        self._reconnecting = False
+        self._running = False
+        self._op_log: list[dict] = []
 
-    def _make_data_callback(self, name):
-        def callback(
-            characteristic: BleakGATTCharacteristic, raw_data: bytearray
-        ) -> None:
-            toa_s = get_time()
-            sample = NiclaData.from_bytes(raw_data)
-            self._nicla_latest_data[name].append(sample)
-
-            if (
-                self._is_keep_data_event.is_set()
-                and not self._is_stop_new_data_event.is_set()
-            ):
-                self._nicla_data_queue.put((name, toa_s, sample))
-
-        return callback
-
-    def _make_disconnection_callback(self, name: str, device: BLEDevice):
-        def callback(client: BleakClient) -> None:
-            print(f"Device {name} [{device.address}] disconnected.", flush=True)
-            self._connected_devices.pop(name, None)
-            self._disconnected_devices[name] = (device, get_time())
-
-        return callback
-
-    async def _discover(self) -> bool:
-        discovered_devices = await BleakScanner.discover(
-            timeout=10.0, service_uuids=[self._service_uuid]
+    @property
+    def is_connected(self) -> bool:
+        return (
+            self._connected
+            and self._client is not None
+            and self._client.is_connected
         )
-        found = list(map(lambda device: device.address, discovered_devices))
-        if not all([(mac in found) for mac in self._nicla_mac_mapping.values()]):
-            not_found = [
-                name
-                for name, mac in self._nicla_mac_mapping.items()
-                if mac not in found
-            ]
-            print(
-                f"Couldn't find {not_found}.\n",
-                "Make sure all Niclas are advertising.",
-                flush=True,
-            )
-            return False
 
-        inverted_mac_mapping = {v: k for k, v in self._nicla_mac_mapping.items()}
-        self._discovered_devices = {
-            inverted_mac_mapping[device.address]: device
-            for device in filter(
-                lambda d: d.address in self._nicla_mac_mapping.values(),
-                discovered_devices,
-            )
+    @property
+    def current_status(self) -> int:
+        return self._current_status
+
+    @property
+    def current_status_name(self) -> str:
+        return STATUS_NAMES.get(self._current_status, f"UNKNOWN(0x{self._current_status:02x})")
+
+    @property
+    def operation_log(self) -> list[dict]:
+        return list(self._op_log)
+
+    def _log_op(self, op: str, latency_ms: Optional[float] = None, success: bool = True):
+        entry = {
+            "timestamp": time.time(),
+            "perf_counter": time.perf_counter(),
+            "operation": op,
+            "success": success,
         }
+        if latency_ms is not None:
+            entry["latency_ms"] = latency_ms
+        self._op_log.append(entry)
+
+    def _status_callback(self, sender, data: bytearray):
+        if len(data) > 0:
+            self._current_status = data[0]
+        self._status_event.set()
+        logger.debug("Status notification: %s", self.current_status_name)
+
+    def _on_disconnect(self, client: BleakClient):
+        logger.warning("BLE disconnected")
+        self._connected = False
+        if self._running and not self._reconnecting:
+            asyncio.ensure_future(self._auto_reconnect())
+
+    async def _auto_reconnect(self):
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+        delay = self._reconnect_delay
+
+        for attempt in range(1, self._max_reconnect_attempts + 1):
+            logger.info("Reconnect attempt %d/%d (delay %.1fs)",
+                        attempt, self._max_reconnect_attempts, delay)
+            await asyncio.sleep(delay)
+            try:
+                if await self._do_connect():
+                    logger.info("Reconnected on attempt %d", attempt)
+                    self._log_op("reconnect", success=True)
+                    self._reconnecting = False
+                    return
+            except Exception as e:
+                logger.warning("Reconnect attempt %d failed: %s", attempt, e)
+            delay = min(delay * self._reconnect_backoff, 30.0)
+
+        logger.error("Failed to reconnect after %d attempts", self._max_reconnect_attempts)
+        self._log_op("reconnect", success=False)
+        self._reconnecting = False
+
+    async def _do_connect(self) -> bool:
+        if self._address:
+            logger.info("Connecting directly to %s...", self._address)
+            target = self._address
+        else:
+            device = await BleakScanner.find_device_by_name(
+                self._device_name, timeout=self._scan_timeout
+            )
+            if device is None:
+                logger.warning("Device '%s' not found", self._device_name)
+                return False
+            logger.info("Found %s [%s]", device.name, device.address)
+            target = device
+
+        self._client = BleakClient(
+            target,
+            disconnected_callback=self._on_disconnect,
+            timeout=15.0,
+        )
+        await self._client.connect()
+        self._connected = True
+
+        await self._client.start_notify(CUE_STATUS_CHAR_UUID, self._status_callback)
+        logger.info("Connected and subscribed. MTU: %d", self._client.mtu_size)
         return True
 
-    async def _connect_all(self) -> bool:
+    # --- Public API ---
+
+    async def connect(self) -> bool:
+        """Discover and connect to the earbud."""
         try:
-            async with asyncio.TaskGroup() as tg:
-                client_tasks = [
-                    tg.create_task(self._connect_and_subscribe(name, device))
-                    for name, device in self._discovered_devices.items()
-                ]
-            return all([t.result() for t in client_tasks])
-        except Exception as e:
-            print("Failed to connect to some of the Niclas.\n", e, flush=True)
+            self._running = True
+            return await self._do_connect()
+        except BleakError as e:
+            logger.error("Connection error: %s", e)
+            self._connected = False
             return False
 
-    async def _connect_and_subscribe(self, name: str, device: BLEDevice) -> bool:
-        client = BleakClient(
-            device,
-            disconnected_callback=self._make_disconnection_callback(name, device),
-        )
-        try:
-            await client.connect()
-            print(f"Connected to {name} [{device.address}]", flush=True)
-            await client.start_notify(self._char_uuid, self._make_data_callback(name))
-            self._connected_devices[name] = client
-            return True
-        except Exception as e:
-            print(f"Failed to connect to {name}: {e}", flush=True)
-            return False
-
-    async def connect(self):
-        # Discover IMUs.
-        while not (result := await self._discover()):
-            print("Trying to rediscover Niclas. Make sure all are on.", flush=True)
-            await asyncio.sleep(2)
-
-        # Connect all BLE IMUs.
-        while not (result := await self._connect_all()):
-            await self.cleanup()
-            print("Trying to reconnect to Niclas.", flush=True)
-            await asyncio.sleep(2)
-
-    async def run(self):
-        while not self._is_cleanup_event.is_set():
-            for name, (device, _) in list(self._disconnected_devices.items()):
-                print(f"Trying to reconnect to {name}...", flush=True)
-
-                fresh_device = await BleakScanner.find_device_by_address(
-                    device.address, timeout=1.0
-                )
-                if not fresh_device:
-                    print(f"Device {name} not found in scan.", flush=True)
-                    continue
-
-                success = await self._connect_and_subscribe(name, fresh_device)
-                if success:
-                    print(f"Reconnected to {name}.", flush=True)
-                    self._disconnected_devices.pop(name, None)
-                else:
-                    print(f"Reconnect to {name} failed, will retry later.", flush=True)
+    async def run(self, is_cleanup_event):
+        """Background reconnection loop (matches NiclaBleBackend.run pattern)."""
+        while not is_cleanup_event.is_set():
+            if not self.is_connected and not self._reconnecting:
+                await self._auto_reconnect()
             await asyncio.sleep(1.5)
 
     async def cleanup(self):
-        try:
-            await asyncio.gather(
-                *(
-                    c.stop_notify(self._char_uuid)
-                    for c in self._connected_devices.values()
-                )
-            )
-        except Exception as e:
-            print(e, flush=True)
-
-        for dev_name, dev in list(self._connected_devices.items()):
+        """Disconnect and release resources."""
+        self._running = False
+        if self._client and self._client.is_connected:
             try:
-                await dev.disconnect()
-            except Exception as e:
-                print(f"Failed to disconnect {dev_name}", e, flush=True)
+                await self._client.stop_notify(CUE_STATUS_CHAR_UUID)
+            except BleakError:
+                pass
+            await self._client.disconnect()
+        self._connected = False
+        logger.info("BLE cleanup done")
+
+    async def _ensure_connected(self) -> bool:
+        if self.is_connected:
+            return True
+        logger.warning("Not connected, reconnecting...")
+        try:
+            return await self._do_connect()
+        except BleakError as e:
+            logger.error("Reconnect failed: %s", e)
+            return False
+
+    async def start_cue(self, tone_id: int = 0, volume: int = 80) -> bool:
+        if not await self._ensure_connected():
+            self._log_op("start_cue", success=False)
+            return False
+
+        cmd = bytes([CUE_CMD_START, tone_id & 0xFF, volume & 0xFF])
+        try:
+            self._status_event.clear()
+            t0 = time.perf_counter()
+            await self._client.write_gatt_char(CUE_CMD_CHAR_UUID, cmd, response=False)
+            elapsed = (time.perf_counter() - t0) * 1000
+            self._log_op("start_cue", latency_ms=elapsed)
+            return True
+        except BleakError as e:
+            logger.error("Failed to send START: %s", e)
+            self._log_op("start_cue", success=False)
+            self._connected = False
+            return False
+
+    async def stop_cue(self) -> bool:
+        if not await self._ensure_connected():
+            self._log_op("stop_cue", success=False)
+            return False
+
+        cmd = bytes([CUE_CMD_STOP])
+        try:
+            self._status_event.clear()
+            t0 = time.perf_counter()
+            await self._client.write_gatt_char(CUE_CMD_CHAR_UUID, cmd, response=False)
+            elapsed = (time.perf_counter() - t0) * 1000
+            self._log_op("stop_cue", latency_ms=elapsed)
+            return True
+        except BleakError as e:
+            logger.error("Failed to send STOP: %s", e)
+            self._log_op("stop_cue", success=False)
+            self._connected = False
+            return False
+
+    async def configure(self, config: CueingConfig) -> bool:
+        if not await self._ensure_connected():
+            self._log_op("configure", success=False)
+            return False
+
+        cmd = bytes([CUE_CMD_CONFIGURE]) + config.to_bytes()
+        try:
+            await self._client.write_gatt_char(CUE_CMD_CHAR_UUID, cmd)
+            self._log_op("configure")
+            return True
+        except BleakError as e:
+            logger.error("Failed to send CONFIGURE: %s", e)
+            self._log_op("configure", success=False)
+            self._connected = False
+            return False
+
+    async def read_config(self) -> Optional[CueingConfig]:
+        if not await self._ensure_connected():
+            return None
+        try:
+            data = await self._client.read_gatt_char(CUE_CONFIG_CHAR_UUID)
+            return CueingConfig.from_bytes(data)
+        except BleakError as e:
+            logger.error("Failed to read config: %s", e)
+            return None
+
+    async def read_status(self) -> Optional[int]:
+        if not await self._ensure_connected():
+            return None
+        try:
+            data = await self._client.read_gatt_char(CUE_STATUS_CHAR_UUID)
+            return data[0] if data else None
+        except BleakError as e:
+            logger.error("Failed to read status: %s", e)
+            return None
+
+    async def wait_for_status(self, timeout: float = 2.0) -> Optional[int]:
+        self._status_event.clear()
+        try:
+            await asyncio.wait_for(self._status_event.wait(), timeout=timeout)
+            return self._current_status
+        except asyncio.TimeoutError:
+            return None

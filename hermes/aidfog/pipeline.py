@@ -1,5 +1,11 @@
-from multiprocessing import Process, Queue, Event, Value
-from multiprocessing.sharedctypes import Synchronized
+"""
+HERMES Pipeline for PineBuds Pro audio cueing.
+
+Receives FoG detection results from the upstream AI node and translates
+them into cueing commands for the BudsHandler running in a background process.
+"""
+
+from multiprocessing import Process, Queue, Event
 import numpy as np
 
 from hermes.base.nodes.pipeline import Pipeline
@@ -15,6 +21,7 @@ from hermes.utils.zmq_utils import (
 
 from .controller import BudsHandler
 from .stream import BudsStream
+from .utils.types import CueState
 
 
 class BudsPipeline(Pipeline):
@@ -34,53 +41,23 @@ class BudsPipeline(Pipeline):
         port_killsig: str = PORT_KILL,
         **_,
     ):
-        niclas: dict = stream_out_spec["niclas"]
-        motors: dict = stream_out_spec["motors"]
-        pmu: dict = stream_out_spec["pmu"]
-        dt: float = stream_out_spec["dt"]
+        buds: dict = stream_out_spec["buds"]
+        dt: float = stream_out_spec.get("dt", 0.01)
 
-        self._nicla_mapping: dict[str, dict] = niclas["device_mapping"]
-        self._motor_mapping: dict[str, dict] = motors["device_mapping"]
-        self._nicla_payload_mode = NiclaPayloadMode(
-            is_acc=niclas["is_acc"],
-            is_gyr=niclas["is_gyr"],
-            is_mag=niclas["is_mag"],
-            is_euler=niclas["is_euler"],
-            is_quat=niclas["is_quat"],
-            is_temp=niclas["is_temp"],
-            is_baro=niclas["is_baro"],
-            is_hum=niclas["is_hum"],
-        )
-
-        # Keyboard stdin input queue.
         self._input_queue: Queue[tuple[float, str]] = _["input_queue"]
+        self._cueing_command_queue: Queue[dict] = Queue()
+        self._cueing_status_queue: Queue[tuple[float, int]] = Queue()
 
-        # Onboard data.
-        self._nicla_data_queue: Queue[tuple[str, float, NiclaData]] = Queue()
+        # FSM state for cueing control.
+        self._cue_state = CueState.IDLE
+        self._threshold_high: float = buds.get("threshold_high", 0.7)
+        self._threshold_low: float = buds.get("threshold_low", 0.3)
 
-        # Shared controls for exo handler.
-        self._next_mode: Synchronized[int] = Value("i")
-        self._next_fatigue: Synchronized[float] = Value("f")
-        self._next_mode_sequence_id: Synchronized[int] = Value("i")
-        self._next_fatigue_sequence_id: Synchronized[int] = Value("i")
-
-        # Synchronization primitives between background exo handler and foreground HERMES procs.
         self._is_ready_event = Event()
         self._is_keep_data_event = Event()
         self._is_stop_new_data_event = Event()
         self._is_cleanup_event = Event()
         self._is_finished_event = Event()
-
-        # Outgoing onboard data.
-        telemetry_kwargs = {
-            "nicla_data_queue": self._nicla_data_queue,
-        }
-
-        # Incoming AI controls.
-        ai_kwargs = {
-            "next_mode": self._next_mode,
-            "next_mode_sequence_id": self._next_mode_sequence_id,
-        }
 
         hermes_kwargs = {
             "ref_time_s": logging_spec.ref_time_s,
@@ -96,9 +73,9 @@ class BudsPipeline(Pipeline):
             target=launch_handler,
             args=(BudsHandler,),
             kwargs={
-                "niclas": niclas,
-                **telemetry_kwargs,
-                **ai_kwargs,
+                "buds": buds,
+                "cueing_command_queue": self._cueing_command_queue,
+                "cueing_status_queue": self._cueing_status_queue,
                 **hermes_kwargs,
                 "dt": dt,
             },
@@ -106,9 +83,7 @@ class BudsPipeline(Pipeline):
         self._handler_proc.start()
         self._is_ready_event.wait()
 
-        stream_out_spec = {
-            "niclas": niclas,
-        }
+        stream_out_spec = {"buds": buds}
 
         super().__init__(
             host_ip=host_ip,
@@ -130,91 +105,53 @@ class BudsPipeline(Pipeline):
         self._is_keep_data_event.set()
 
     def _process_data(self, topic: str, msg: dict) -> None:
-        if "intent" in msg["data"]:
-            # Passes to the top-level exo module the next state to choose internally when to switch to.
-            # NOTE: AI component will provide `int` matching one of the ModeStateEnum values.
-            self._next_mode.value = msg["data"]["intent"]["mode"]
-            self._next_mode_sequence_id.value = msg["data"]["intent"]["sequence_id"]
-        elif "fatigue" in msg["data"]:
-            # Passes to the top-level exo module the next fatigue percentage to choose internally to scale torques.
-            # NOTE: AI component will provide `float` in range [0, 1].
-            self._next_fatigue.value = msg["data"]["fatigue"]["level"]
-            self._next_fatigue_sequence_id.value = msg["data"]["fatigue"]["sequence_id"]
+        """Receive FoG detection results from upstream AI node."""
+        data = msg.get("data", {})
+        fog_prob = data.get("fog_probability", 0.0)
+
+        if self._cue_state == CueState.IDLE:
+            if fog_prob >= self._threshold_high:
+                self._cue_state = CueState.CUEING
+                self._cueing_command_queue.put({
+                    "action": "start",
+                    "tone_id": 0,
+                    "volume": 80,
+                })
+        elif self._cue_state == CueState.CUEING:
+            if fog_prob < self._threshold_low:
+                self._cue_state = CueState.IDLE
+                self._cueing_command_queue.put({"action": "stop"})
 
     def _generate_data(self) -> None:
-        # Pass internally generated data to the middleware.
+        """Forward cueing status data to HERMES middleware for logging."""
         process_time_s = get_time()
         tag: str = "%s.data" % self._log_source_tag()
         output = {}
 
-        # Nicla data.
-        nicla_data: dict[str, list[NiclaData]] = {
-            name: [] for name in self._nicla_mapping.keys()
-        }
-        nicla_toa: dict[str, list[float]] = {
-            name: [] for name in self._nicla_mapping.keys()
-        }
-        while not self._nicla_data_queue.empty():
-            nicla_name, toa_s, nicla_sample = self._nicla_data_queue.get_nowait()
-            nicla_toa[nicla_name].append(toa_s)
-            nicla_data[nicla_name].append(nicla_sample)
-        for nicla_name, data in nicla_data.items():
-            if data:
-                output[f"nicla_{nicla_name}"] = {
-                    "toa_s": np.array(
-                        [nicla_toa[nicla_name]], dtype=np.float64
-                    ).transpose((1, 0)),
-                    "sequence_id": np.array(
-                        [list(map(lambda n: n.sequence_id, data))], dtype=np.uint32
-                    ).transpose((1, 0)),
-                    "timestamp": np.array(
-                        [list(map(lambda n: n.timestamp, data))], dtype=np.uint32
-                    ).transpose((1, 0)),
-                    "count": len(data),
-                }
-                for (
-                    data_name,
-                    data_getter,
-                ) in self._nicla_payload_mode.get_data_getters().items():
-                    output[f"nicla_{nicla_name}"][data_name] = data_getter(data)
+        status_data: list[tuple[float, int]] = []
+        while not self._cueing_status_queue.empty():
+            status_data.append(self._cueing_status_queue.get_nowait())
 
-        # Motor command data.
-        motor_command_data: dict[str, tuple[str, list[MotorCommand]]] = {
-            motor_spec["can_id"]: (motor_name, [])
-            for motor_name, motor_spec in self._motor_mapping.items()
-        }
-        while not self._motor_command_queue.empty():
-            motor_command = self._motor_command_queue.get_nowait()
-            motor_command_data[motor_command.motor_id][1].append(motor_command)
-        for motor_name, data in motor_command_data.values():
-            if data:
-                output[f"command_{motor_name}"] = {
-                    "timestamp": np.array(
-                        [list(map(lambda m: m.timestamp, data))], dtype=np.float64
-                    ).transpose((1, 0)),
-                    "data": np.array(
-                        [list(map(lambda m: bytes(m.data), data))]
-                    ).transpose((1, 0)),
-                    "control_mode": np.array(
-                        [list(map(lambda m: m.control_mode, data))], dtype=np.uint8
-                    ).transpose((1, 0)),
-                    "count": len(data),
-                }
+        if status_data:
+            output["cueing"] = {
+                "toa_s": np.array(
+                    [[t for t, _ in status_data]], dtype=np.float64
+                ).transpose((1, 0)),
+                "status": np.array(
+                    [[s for _, s in status_data]], dtype=np.uint8
+                ).transpose((1, 0)),
+                "count": len(status_data),
+            }
 
         if output:
             self._publish(tag, process_time_s=process_time_s, data=output)
         elif (
             self._is_finished_event.is_set()
-            and self._motor_data_queue.empty()
-            and self._nicla_data_queue.empty()
-            and self._mode_changed_queue.empty()
-            and self._state_changed_queue.empty()
-            and self._phase_estimate_queue.empty()
+            and self._cueing_status_queue.empty()
         ):
             self._notify_no_more_data_out()
 
     def _stop_new_data(self):
-        # Trigger exo handler to stop adding data to the timestamp alignment buffer for the AI model to consumer.
         self._is_cleanup_event.set()
         self._is_stop_new_data_event.set()
 
