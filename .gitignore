@@ -20,3 +20,6 @@ site/
 dist/
 *.egg-info/
 build/
+
+# Documentation (kept locally only)
+*.md
