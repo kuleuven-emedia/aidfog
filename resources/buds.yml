@@ -1,31 +1,12 @@
 ############
 #
-# Copyright (c) 2024 Maxim Yudayev and KU Leuven eMedia Lab
+# Copyright (c) 2025 Arnau Dillen and KU Leuven eMedia Lab
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
-# Created 2024-2025 for the KU Leuven AidWear, AidFOG, and RevalExo projects
-# by Maxim Yudayev [https://yudayev.com].
+# Created 2025 for the KU Leuven AidFOG project.
 #
 # ############
 
-host_ip : "127.0.0.1"
+host_ip: "127.0.0.1"
 is_master_broker: True
 
 remote_subscriber_ips: []
@@ -54,79 +35,44 @@ audio_codec_config_filepath : null
 
 
 producer_specs:
-  - package: "revalexo_cli"
-    class: "RevalexoCliProducer"
-    settings: {}
+  - package: "aidfog_replay"
+    class: "ImuReplayProducer"
+    settings:
+      dataset_path: "./data/dataset.hdf5"
+      sampling_rate_hz: 60
+      loop: true
 
 
 consumer_specs: []
 
 
 pipeline_specs:
-  - package: "revalexo"
-    class: "ExoPipeline"
+  - package: "aidfog_ai"
+    class: "TorchPipeline"
+    settings:
+      model_path: "./resources/tcn_model_60fps.pth"
+      input_size: [5, 6]
+      output_classes: ["no_fog", "fog"]
+      sampling_rate_hz: 60
+      stream_in_specs:
+        - package: "aidfog_replay"
+          class: "ImuReplayProducer"
+          settings:
+            sampling_rate_hz: 60
+
+  - package: "aidfog"
+    class: "BudsPipeline"
     settings:
       stream_out_spec:
-        dt: 0.01
-        niclas:
-          sampling_rate_hz: 50
-          connection_type: "BLE"  # BLE or I2C
-          device_mapping:  # for BLE connection type
-            torso       : "B2:C9:23:6B:E0:C6"
-            thigh_right : "AC:FB:DC:C8:F1:16"
-            thigh_left  : "5C:3E:2C:04:28:85"
-            shank_right : "27:6D:73:51:55:D9"
-            shank_left  : "45:7B:E2:8D:B1:F6"
-            # foot_right  : "C2:AE:CC:0B:C8:DE"
-            # foot_left   : "1A:3D:6D:EF:68:45"
-          service_uuid: "19b10000-0000-537e-4f6c-d104768a1214"
-          char_uuid: "19b10000-1001-537e-4f6c-d104768a1214"
-          # device_mapping:  # for I2C connection type
-          #   torso:
-          #     address: 0x11
-          #     int_pin: 31
-          #   thigh_right:
-          #     address: 0x12
-          #     int_pin: 11
-          #   shank_right:
-          #     address: 0x13
-          #     int_pin: 13
-          #   thigh_left:
-          #     address: 0x14
-          #     int_pin: 15
-          #   shank_left:
-          #     address: 0x15
-          #     int_pin: 16
-          is_acc    : False
-          is_gyr    : True
-          is_mag    : False
-          is_euler  : True
-          is_quat   : False
-          is_temp   : False
-          is_baro   : False
-          is_hum    : False
-        motors:
-          is_emulate_can: False  # creates a virtual CAN bus for testing.
-          sampling_rate_hz: 50
-          device_mapping:
-            knee_right:
-              can_id: 1
-              type: "AK10_9"
-            hip_left:
-              can_id: 2
-              type: "AK80_8"
-            hip_right:
-              can_id: 3
-              type: "AK80_8"
-            knee_left:
-              can_id: 4
-              type: "AK10_9"
-        pmu:
-          id: 0x1804447D
-          time_threshold: 0.05
-          sampling_rate_hz: 50
-
+        buds:
+          device_name: "D&D TECH"
+          address: null          # set to MAC address string to skip BLE scan, e.g. "12:34:56:C2:A2:30"
+          sampling_rate_hz: 100
+          threshold_high: 0.7   # fog_prob above this triggers a cue
+          threshold_low: 0.3    # fog_prob below this stops the cue
+          dt: 0.01
       stream_in_specs:
-        - package: "revalexo_cli"
-          class: "RevalexoCliProducer"
-          settings: {}
+        - package: "aidfog_ai"
+          class: "TorchPipeline"
+          settings:
+            sampling_rate_hz: 60

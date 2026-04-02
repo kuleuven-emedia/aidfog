@@ -44,7 +44,6 @@ class BudsPipeline(Pipeline):
         buds: dict = stream_out_spec["buds"]
         dt: float = stream_out_spec.get("dt", 0.01)
 
-        self._input_queue: Queue[tuple[float, str]] = _["input_queue"]
         self._cueing_command_queue: Queue[dict] = Queue()
         self._cueing_status_queue: Queue[tuple[float, int]] = Queue()
 
@@ -66,7 +65,6 @@ class BudsPipeline(Pipeline):
             "is_stop_new_data_event": self._is_stop_new_data_event,
             "is_cleanup_event": self._is_cleanup_event,
             "is_finished_event": self._is_finished_event,
-            "input_queue": self._input_queue,
         }
 
         self._handler_proc = Process(

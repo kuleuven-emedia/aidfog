@@ -28,7 +28,6 @@ class BudsHandler:
         is_stop_new_data_event: _Event,
         is_cleanup_event: _Event,
         is_finished_event: _Event,
-        input_queue: "Queue[tuple[float, str]]",
         cueing_command_queue: "Queue[dict]",
         cueing_status_queue: "Queue[tuple[float, int]]",
         dt: float = 0.01,
@@ -36,7 +35,6 @@ class BudsHandler:
         self._ref_time_s = ref_time_s
         self._dt = dt
 
-        self._input_queue = input_queue
         self._cueing_command_queue = cueing_command_queue
         self._cueing_status_queue = cueing_status_queue
 
@@ -118,8 +116,7 @@ class BudsHandler:
 
         connected = await self._buds_backend.connect()
         if not connected:
-            logger.error("Failed to connect to earbuds")
-            self._is_finished_event.set()
+            logger.error("Failed to connect to earbuds on initial attempt, reconnect loop will retry")
             return
 
         logger.info("BudsHandler ready, signaling pipeline")
@@ -131,8 +128,8 @@ class BudsHandler:
             self._buds_backend.run(self._is_cleanup_event),
         )
 
-        self._is_finished_event.set()
         await self._cleanup()
+        self._is_finished_event.set()
 
     def __call__(self) -> None:
         asyncio.run(self.main())
