@@ -36,11 +36,9 @@ STATUS_NAMES = {
     CUE_STATUS_ERROR: "ERROR",
 }
 
-# --- Default earbud addresses ---
+# --- Default earbud device name (used for BLE scanning when no address is provided) ---
 
 DEFAULT_DEVICE_NAME = "D&D TECH"
-RIGHT_EARBUD_ADDRESS = "12:34:56:C2:A2:30"
-LEFT_EARBUD_ADDRESS = "12:34:56:C2:A2:31"
 
 
 # --- Data structures ---

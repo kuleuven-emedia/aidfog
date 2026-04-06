@@ -42,7 +42,14 @@ class BudsPipeline(Pipeline):
         **_,
     ):
         buds: dict = stream_out_spec["buds"]
-        dt: float = stream_out_spec.get("dt", 0.01)
+        dt: float = buds.get("dt", 0.01)
+
+        # Resolve address from device_mapping (follows the Nicla pattern).
+        # Use the first entry in device_mapping if present; fall back to
+        # an explicit 'address' key or None (triggers name-based BLE scan).
+        device_mapping: dict = buds.get("device_mapping", {})
+        address = list(device_mapping.values())[0] if device_mapping else buds.get("address", None)
+        buds = {**buds, "address": address}
 
         self._cueing_command_queue: Queue[dict] = Queue()
         self._cueing_status_queue: Queue[tuple[float, int]] = Queue()

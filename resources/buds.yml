@@ -1,8 +1,27 @@
 ############
 #
-# Copyright (c) 2025 Arnau Dillen and KU Leuven eMedia Lab
+# Copyright (c) 2024 Maxim Yudayev and KU Leuven eMedia Lab
 #
-# Created 2025 for the KU Leuven AidFOG project.
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# Created 2024-2025 for the KU Leuven AidWear, AidFOG, and RevalExo projects
+# by Maxim Yudayev [https://yudayev.com].
 #
 # ############
 
@@ -66,7 +85,9 @@ pipeline_specs:
       stream_out_spec:
         buds:
           device_name: "D&D TECH"
-          address: null          # set to MAC address string to skip BLE scan, e.g. "12:34:56:C2:A2:30"
+          device_mapping:
+            right: "12:34:56:C2:A2:30"
+            left:  "12:34:56:C2:A2:31"
           sampling_rate_hz: 100
           threshold_high: 0.7   # fog_prob above this triggers a cue
           threshold_low: 0.3    # fog_prob below this stops the cue
