@@ -31,14 +31,6 @@ class BudsStream(Stream):
             sampling_rate_hz=sample_rate_hz,
         )
 
-        self.add_stream(
-            device_name="cueing",
-            stream_name="count",
-            data_type="uint16",
-            sample_size=(1,),
-            sampling_rate_hz=sample_rate_hz,
-        )
-
     def get_fps(self) -> dict[str, float | None]:
         return {
             "cueing": super()._get_fps("cueing", "toa_s"),

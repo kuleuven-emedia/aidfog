@@ -108,6 +108,8 @@ class BudsHandler:
 
     async def _cleanup(self) -> None:
         logger.info("Cleaning up BudsHandler.")
+        self._buds_backend._running = False
+        self._buds_backend._reconnecting = True
         await self._buds_backend.stop_cue()
         await self._buds_backend.cleanup()
 

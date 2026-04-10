@@ -8,7 +8,6 @@ Follows the same Backend pattern as the original NiclaBleBackend.
 
 import asyncio
 import logging
-import struct
 import time
 from typing import Optional
 

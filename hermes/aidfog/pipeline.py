@@ -147,7 +147,6 @@ class BudsPipeline(Pipeline):
                 "status": np.array(
                     [[s for _, s in status_data]], dtype=np.uint8
                 ).transpose((1, 0)),
-                "count": np.array([[len(status_data)]], dtype=np.uint16),
             }
 
         if output:

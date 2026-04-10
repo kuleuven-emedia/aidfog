@@ -6,9 +6,8 @@ UUIDs must match the firmware at:
 """
 
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 # --- BLE GATT UUIDs (128-bit, base: AC0000xx-CAFE-B0BA-F001-DEADBEEF0000) ---
