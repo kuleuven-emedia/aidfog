@@ -14,6 +14,4 @@ from .types import (
     CueEvent,
     CueingAction,
     DEFAULT_DEVICE_NAME,
-    RIGHT_EARBUD_ADDRESS,
-    LEFT_EARBUD_ADDRESS,
 )
