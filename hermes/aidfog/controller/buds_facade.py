@@ -16,7 +16,6 @@ from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
 from ..utils.types import (
-    CUEING_SERVICE_UUID,
     CUE_CMD_CHAR_UUID,
     CUE_STATUS_CHAR_UUID,
     CUE_CONFIG_CHAR_UUID,
@@ -105,7 +104,7 @@ class BudsBleBackend:
         logger.warning("BLE disconnected")
         self._connected = False
         if self._running and not self._reconnecting:
-            asyncio.ensure_future(self._auto_reconnect())
+            asyncio.create_task(self._auto_reconnect())
 
     async def _auto_reconnect(self):
         if self._reconnecting:
@@ -179,6 +178,7 @@ class BudsBleBackend:
     async def cleanup(self):
         """Disconnect and release resources."""
         self._running = False
+        self._reconnecting = True  # prevent _on_disconnect from triggering reconnect
         if self._client and self._client.is_connected:
             try:
                 await self._client.stop_notify(CUE_STATUS_CHAR_UUID)
@@ -243,8 +243,10 @@ class BudsBleBackend:
 
         cmd = bytes([CUE_CMD_CONFIGURE]) + config.to_bytes()
         try:
-            await self._client.write_gatt_char(CUE_CMD_CHAR_UUID, cmd)
-            self._log_op("configure")
+            t0 = time.perf_counter()
+            await self._client.write_gatt_char(CUE_CMD_CHAR_UUID, cmd, response=False)
+            elapsed = (time.perf_counter() - t0) * 1000
+            self._log_op("configure", latency_ms=elapsed)
             return True
         except BleakError as e:
             logger.error("Failed to send CONFIGURE: %s", e)

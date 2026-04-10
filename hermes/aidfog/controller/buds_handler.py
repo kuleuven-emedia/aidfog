@@ -111,21 +111,28 @@ class BudsHandler:
         await self._buds_backend.stop_cue()
         await self._buds_backend.cleanup()
 
+    async def _wait_for_connection_then_signal(self) -> None:
+        """Wait until BLE connects (initial or via reconnect), then set is_ready_event."""
+        while not self._is_cleanup_event.is_set():
+            if self._buds_backend.is_connected:
+                logger.info("BudsHandler ready, signaling pipeline")
+                self._is_ready_event.set()
+                return
+            await asyncio.sleep(0.5)
+
     async def main(self) -> None:
         init_time(ref_time=self._ref_time_s)
 
         connected = await self._buds_backend.connect()
-        if not connected:
-            logger.error("Failed to connect to earbuds on initial attempt, reconnect loop will retry")
-            return
-
-        logger.info("BudsHandler ready, signaling pipeline")
-        self._is_ready_event.set()
+        if connected:
+            logger.info("BudsHandler ready, signaling pipeline")
+            self._is_ready_event.set()
 
         await asyncio.gather(
             self._process_commands(),
             self._watch_status(),
             self._buds_backend.run(self._is_cleanup_event),
+            *([] if connected else [self._wait_for_connection_then_signal()]),
         )
 
         await self._cleanup()

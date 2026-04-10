@@ -112,7 +112,9 @@ class BudsPipeline(Pipeline):
     def _process_data(self, topic: str, msg: dict) -> None:
         """Receive FoG detection results from upstream AI node."""
         data = msg.get("data", {})
-        fog_prob = data.get("fog_probability", 0.0)
+        pytorch_data = data.get("pytorch-worker", {})
+        logits = pytorch_data.get("logits", [0.0, 0.0])
+        fog_prob = float(logits[1])
 
         if self._cue_state == CueState.IDLE:
             if fog_prob >= self._threshold_high:
@@ -145,7 +147,7 @@ class BudsPipeline(Pipeline):
                 "status": np.array(
                     [[s for _, s in status_data]], dtype=np.uint8
                 ).transpose((1, 0)),
-                "count": len(status_data),
+                "count": np.array([[len(status_data)]], dtype=np.uint16),
             }
 
         if output:
