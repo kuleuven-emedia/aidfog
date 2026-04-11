@@ -57,8 +57,11 @@ producer_specs:
   - package: "aidfog_replay"
     class: "ImuReplayProducer"
     settings:
-      dataset_path: "./data/dataset.hdf5"
-      sampling_rate_hz: 60
+      imu_root: "./data/imu"             # folder with subject subfolders containing .npy IMU files
+      annot_root: "./data/annot"          # folder with subject subfolders containing .npy label files
+      sampling_rate_hz: 60               # target rate (data is resampled from 64 Hz)
+      original_rate_hz: 64               # raw dataset rate
+      sensor_indices: [0, 5, 6, 2, 3]   # select 5 sensors from raw layout
       loop: true
 
   - package: "aidfog_audio"
