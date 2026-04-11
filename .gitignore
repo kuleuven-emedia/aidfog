@@ -23,3 +23,6 @@ build/
 
 # Documentation (kept locally only)
 *.md
+!README.md
+!CHANGELOG.md
+!buds_firmware/README.md
