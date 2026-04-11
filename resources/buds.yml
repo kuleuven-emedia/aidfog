@@ -42,7 +42,7 @@ logging_spec:
   stream_hdf5         : True
   stream_csv          : False
   stream_video        : False
-  stream_audio        : False
+  stream_audio        : True
 
   dump_csv            : False
   dump_hdf5           : False
@@ -50,7 +50,7 @@ logging_spec:
   dump_audio          : False
 
 video_codec_config_filepath : null
-audio_codec_config_filepath : null
+audio_codec_config_filepath : "./resources/audio_codec.yml"
 
 
 producer_specs:
@@ -60,6 +60,15 @@ producer_specs:
       dataset_path: "./data/dataset.hdf5"
       sampling_rate_hz: 60
       loop: true
+
+  - package: "aidfog_audio"
+    class: "AudioProducer"
+    settings:
+      ffmpeg_backend: "dshow"                          # dshow (Windows), avfoundation (Mac)
+      device_name: "Microphone (Jabra Engage 50)"      # from ffmpeg enumeration
+      sampling_rate_hz: 44100
+      num_channels: 1
+      chunk_size: 1024
 
 
 consumer_specs: []

@@ -1,0 +1,15 @@
+############
+#
+# Copyright (c) 2024 Maxim Yudayev and KU Leuven eMedia Lab
+#
+# Created 2024-2025 for the KU Leuven AidWear, AidFOG, and RevalExo projects
+# by Maxim Yudayev [https://yudayev.com].
+#
+# ############
+
+codec_name: "libmp3lame"
+pix_format: "s16"
+num_cpu: 1
+input_options: {}
+output_options:
+  audio_bitrate: "128k"
