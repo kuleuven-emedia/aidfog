@@ -118,7 +118,7 @@ class AudioProducer(Producer):
                     acodec="pcm_s16le",
                 )
                 .global_args("-hide_banner", "-loglevel", "error")
-                .run_async(pipe_stdout=True, pipe_stderr=True)
+                .run_async(pipe_stdout=True)
             )
             logger.info(
                 "FFmpeg capture started: %s via %s at %d Hz",
@@ -179,8 +179,8 @@ class AudioProducer(Producer):
             # Ensure process is fully stopped.
             if self._ffmpeg_process.poll() is None:
                 self._ffmpeg_process.terminate()
-            self._ffmpeg_process.stdout.close()
-            self._ffmpeg_process.stderr.close()
+            if self._ffmpeg_process.stdout:
+                self._ffmpeg_process.stdout.close()
             self._ffmpeg_process.wait()
             self._ffmpeg_process = None
             logger.info("FFmpeg process cleaned up")
