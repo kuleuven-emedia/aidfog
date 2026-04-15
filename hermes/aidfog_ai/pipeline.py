@@ -141,16 +141,21 @@ class TorchPipeline(Pipeline):
       'prediction': prediction,
       'inference_latency_s': end_time_s-start_time_s,
       'delay_since_first_sensor_s': start_time_s-np.min(toa_s),
-      'delay_since_snapshot_ready_s': start_time_s-msg['process_time_s']
+      'delay_since_snapshot_ready_s': start_time_s-msg.get('process_time_s', start_time_s)
     }
 
     tag: str = "%s.data" % self._log_source_tag()
     self._publish(tag, process_time_s=end_time_s, data={'pytorch-worker': data})
 
 
-  def _stop_new_data(self):
+  def _keep_samples(self) -> None:
     pass
 
+  def _generate_data(self) -> None:
+    pass
+
+  def _stop_new_data(self):
+    pass
 
   def _cleanup(self) -> None:
     super()._cleanup()

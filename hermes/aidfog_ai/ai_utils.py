@@ -57,7 +57,8 @@ def normalize(sensor_sample, b, a, zi, count, mean, var, eps=1e-3):
   acc = sensor_sample[:3]
   filtered_acc = np.zeros_like(acc)
   for j in range(3):
-    filtered_acc[j], zi[j] = lfilter(b, a, [acc[j]], zi=zi[j])
+    out, zi[j] = lfilter(b, a, [acc[j]], zi=zi[j])
+    filtered_acc[j] = out[0]
 
   sensor_sample = np.concatenate((filtered_acc, sensor_sample[3:]))
 
