@@ -85,11 +85,15 @@ class BudsPipeline(Pipeline):
                 "dt": dt,
             },
         )
+        print("[buds_pipeline] launching BudsHandler subprocess...", flush=True)
         self._handler_proc.start()
+        print("[buds_pipeline] waiting for is_ready_event (BLE connect)...", flush=True)
         self._is_ready_event.wait()
+        print("[buds_pipeline] is_ready_event set, continuing init", flush=True)
 
         stream_out_spec = {"buds": buds}
 
+        print("[buds_pipeline] calling super().__init__() (this imports inbound stream modules like torch)...", flush=True)
         super().__init__(
             host_ip=host_ip,
             stream_out_spec=stream_out_spec,
@@ -101,6 +105,7 @@ class BudsPipeline(Pipeline):
             port_sync=port_sync,
             port_killsig=port_killsig,
         )
+        print("[buds_pipeline] super().__init__() returned; about to enter state machine", flush=True)
 
     @classmethod
     def create_stream(cls, stream_spec: dict) -> BudsStream:
