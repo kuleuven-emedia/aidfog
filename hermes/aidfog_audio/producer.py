@@ -55,6 +55,7 @@ class AudioProducer(Producer):
         num_channels: int = 1,
         chunk_size: int = 1024,
         sample_format: str = "s16",
+        rtbufsize: str = "64M",
         port_pub: str = PORT_BACKEND,
         port_sync: str = PORT_SYNC_HOST,
         port_killsig: str = PORT_KILL,
@@ -66,6 +67,7 @@ class AudioProducer(Producer):
         self._num_channels = num_channels
         self._chunk_size = chunk_size
         self._sample_format = sample_format
+        self._rtbufsize = rtbufsize
         self._bytes_per_sample = 2  # s16le = 2 bytes per sample
         self._read_size = chunk_size * self._bytes_per_sample * num_channels
         self._tag: str = "%s.data" % self._log_source_tag()
@@ -111,6 +113,7 @@ class AudioProducer(Producer):
                     format=self._ffmpeg_backend,
                     ar=self._audio_sampling_rate_hz,
                     ac=self._num_channels,
+                    rtbufsize=self._rtbufsize,
                 )
                 .output(
                     "pipe:",
