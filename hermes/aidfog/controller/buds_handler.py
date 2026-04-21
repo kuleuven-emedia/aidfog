@@ -141,4 +141,9 @@ class BudsHandler:
         self._is_finished_event.set()
 
     def __call__(self) -> None:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="[buds_handler] %(levelname)s %(name)s: %(message)s",
+            force=True,
+        )
         asyncio.run(self.main())
