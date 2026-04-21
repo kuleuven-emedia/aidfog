@@ -42,7 +42,7 @@ logging_spec:
   stream_hdf5         : True
   stream_csv          : False
   stream_video        : False
-  stream_audio        : False    # set True on Windows when mic + earbuds are connected
+  stream_audio        : True     # Windows Rode mic capture
 
   dump_csv            : False
   dump_hdf5           : False
@@ -64,15 +64,14 @@ producer_specs:
       sensor_indices: [0, 5, 6, 2, 3]   # select 5 sensors from raw layout
       loop: true
 
-  # Uncomment on Windows when mic is connected:
-  # - package: "aidfog_audio"
-  #   class: "AudioProducer"
-  #   settings:
-  #     ffmpeg_backend: "dshow"
-  #     device_name: "Microphone (Jabra Engage 50)"
-  #     sampling_rate_hz: 44100
-  #     num_channels: 1
-  #     chunk_size: 1024
+  - package: "aidfog_audio"
+    class: "AudioProducer"
+    settings:
+      ffmpeg_backend: "dshow"
+      device_name: "Microphone (RODE NT-USB)"
+      sampling_rate_hz: 48000
+      num_channels: 1
+      chunk_size: 1024
 
 
 consumer_specs: []
