@@ -6,7 +6,9 @@ processes cueing commands received from the Pipeline via a multiprocessing Queue
 """
 
 import asyncio
+import json
 import logging
+import os
 from multiprocessing.synchronize import Event as _Event
 from queue import Queue, Empty
 
@@ -31,9 +33,11 @@ class BudsHandler:
         cueing_command_queue: "Queue[dict]",
         cueing_status_queue: "Queue[tuple[float, int]]",
         dt: float = 0.01,
+        op_log_path: str | None = None,
     ):
         self._ref_time_s = ref_time_s
         self._dt = dt
+        self._op_log_path = op_log_path
 
         self._cueing_command_queue = cueing_command_queue
         self._cueing_status_queue = cueing_status_queue
@@ -112,6 +116,23 @@ class BudsHandler:
         self._buds_backend._reconnecting = True
         await self._buds_backend.stop_cue()
         await self._buds_backend.cleanup()
+        self._dump_op_log()
+
+    def _dump_op_log(self) -> None:
+        """Persist the BLE operation log (timestamps of every GATT write) to JSON.
+
+        Each entry is {timestamp, perf_counter, operation, success, latency_ms}
+        — needed post-hoc to compute BLE-write-to-audio-onset latency.
+        """
+        if not self._op_log_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self._op_log_path), exist_ok=True)
+            with open(self._op_log_path, "w") as f:
+                json.dump(self._buds_backend.operation_log, f, indent=2)
+            logger.info("Wrote BLE op log to %s", self._op_log_path)
+        except Exception as e:
+            logger.error("Failed to write op log: %s", e)
 
     async def _wait_for_connection_then_signal(self) -> None:
         """Wait until BLE connects (initial or via reconnect), then set is_ready_event."""

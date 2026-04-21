@@ -5,6 +5,7 @@ Receives FoG detection results from the upstream AI node and translates
 them into cueing commands for the BudsHandler running in a background process.
 """
 
+import os
 from multiprocessing import Process, Queue, Event
 import numpy as np
 
@@ -74,6 +75,11 @@ class BudsPipeline(Pipeline):
             "is_finished_event": self._is_finished_event,
         }
 
+        op_log_path = os.path.join(
+            logging_spec.log_dir,
+            "%s_ble_op_log.json" % self._log_source_tag(),
+        )
+
         self._handler_proc = Process(
             target=launch_handler,
             args=(BudsHandler,),
@@ -83,6 +89,7 @@ class BudsPipeline(Pipeline):
                 "cueing_status_queue": self._cueing_status_queue,
                 **hermes_kwargs,
                 "dt": dt,
+                "op_log_path": op_log_path,
             },
         )
         self._handler_proc.start()
