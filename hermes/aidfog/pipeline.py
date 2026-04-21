@@ -101,7 +101,17 @@ class BudsPipeline(Pipeline):
 
         stream_out_spec = {"buds": buds}
 
-        _trace("calling super().__init__() (imports torch etc)...")
+        _trace("pre super: importing aidfog_ai to warm torch...")
+        import time as _t
+        _t0 = _t.time()
+        import hermes.aidfog_ai  # triggers torch import
+        _trace(f"aidfog_ai imported in {_t.time()-_t0:.1f}s")
+        _trace("pre super: importing hermes.base.storage.storage...")
+        _t0 = _t.time()
+        import hermes.base.storage.storage  # noqa
+        _trace(f"storage imported in {_t.time()-_t0:.1f}s")
+        _trace("calling super().__init__() (create streams + Storage + storage thread)...")
+        _t0 = _t.time()
         super().__init__(
             host_ip=host_ip,
             stream_out_spec=stream_out_spec,
@@ -113,7 +123,7 @@ class BudsPipeline(Pipeline):
             port_sync=port_sync,
             port_killsig=port_killsig,
         )
-        _trace("super().__init__() returned; about to enter state machine")
+        _trace(f"super().__init__() returned in {_t.time()-_t0:.1f}s; about to enter state machine")
 
     @classmethod
     def create_stream(cls, stream_spec: dict) -> BudsStream:
