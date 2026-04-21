@@ -91,22 +91,21 @@ pipeline_specs:
           settings:
             sampling_rate_hz: 60
 
-  # Uncomment on Windows when earbuds are connected:
-  # - package: "aidfog"
-  #   class: "BudsPipeline"
-  #   settings:
-  #     stream_out_spec:
-  #       buds:
-  #         device_name: "D&D TECH"
-  #         device_mapping:
-  #           right: "12:34:56:C2:A2:30"
-  #           left:  "12:34:56:C2:A2:31"
-  #         sampling_rate_hz: 100
-  #         threshold_high: 0.7
-  #         threshold_low: 0.3
-  #         dt: 0.01
-  #     stream_in_specs:
-  #       - package: "aidfog_ai"
-  #         class: "TorchPipeline"
-  #         settings:
-  #           sampling_rate_hz: 60
+  - package: "aidfog"
+    class: "BudsPipeline"
+    settings:
+      stream_out_spec:
+        buds:
+          device_name: "D&D TECH"
+          device_mapping:
+            right: "12:34:56:C2:A2:30"
+            left:  "12:34:56:C2:A2:31"
+          sampling_rate_hz: 100
+          threshold_high: 0.7
+          threshold_low: 0.3
+          dt: 0.01
+      stream_in_specs:
+        - package: "aidfog_ai"
+          class: "TorchPipeline"
+          settings:
+            sampling_rate_hz: 60
