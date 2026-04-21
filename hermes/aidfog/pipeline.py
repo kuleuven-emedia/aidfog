@@ -5,8 +5,15 @@ Receives FoG detection results from the upstream AI node and translates
 them into cueing commands for the BudsHandler running in a background process.
 """
 
+import sys
 from multiprocessing import Process, Queue, Event
 import numpy as np
+
+
+def _trace(msg: str) -> None:
+    """Unbuffered trace to stderr (stdout from Windows subprocesses is buffered)."""
+    sys.stderr.write("[buds_pipeline] %s\n" % msg)
+    sys.stderr.flush()
 
 from hermes.base.nodes.pipeline import Pipeline
 from hermes.utils.types import LoggingSpec
@@ -85,15 +92,16 @@ class BudsPipeline(Pipeline):
                 "dt": dt,
             },
         )
-        print("[buds_pipeline] launching BudsHandler subprocess...", flush=True)
+        _trace("entered BudsPipeline.__init__")
+        _trace("launching BudsHandler subprocess...")
         self._handler_proc.start()
-        print("[buds_pipeline] waiting for is_ready_event (BLE connect)...", flush=True)
+        _trace("waiting for is_ready_event (BLE connect)...")
         self._is_ready_event.wait()
-        print("[buds_pipeline] is_ready_event set, continuing init", flush=True)
+        _trace("is_ready_event set, continuing init")
 
         stream_out_spec = {"buds": buds}
 
-        print("[buds_pipeline] calling super().__init__() (this imports inbound stream modules like torch)...", flush=True)
+        _trace("calling super().__init__() (imports torch etc)...")
         super().__init__(
             host_ip=host_ip,
             stream_out_spec=stream_out_spec,
@@ -105,7 +113,7 @@ class BudsPipeline(Pipeline):
             port_sync=port_sync,
             port_killsig=port_killsig,
         )
-        print("[buds_pipeline] super().__init__() returned; about to enter state machine", flush=True)
+        _trace("super().__init__() returned; about to enter state machine")
 
     @classmethod
     def create_stream(cls, stream_spec: dict) -> BudsStream:
