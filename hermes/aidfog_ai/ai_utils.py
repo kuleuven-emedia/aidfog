@@ -70,7 +70,10 @@ def normalize(sensor_sample, b, a, zi, count, mean, var, eps=1e-3):
 
   # Normalize: only center gyro (indices 3 to 5)
   sensor_sample = sensor_sample - np.concatenate([np.zeros(3), mean[3:]])
-  std = np.sqrt(var)
+  # Guard against negative running variance (float32 mean vs float64 samples
+  # makes the non-standard Welford update accumulate small negative values,
+  # which silently NaN-poison the model input).
+  std = np.sqrt(np.maximum(var, 0.0))
   std = np.clip(std, eps, None)
   norm_sample = sensor_sample / std
 
