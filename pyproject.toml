@@ -14,7 +14,6 @@ description = "A Pine Buds Pro HERMES audio cueing system for Parkinson's"
 keywords = ["embedded ai", "wearables", "sensors", "closed-loop", "pytorch", "streaming", "realtime processing", "physiology"]
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
-license-files = ["LICENSE"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
@@ -35,6 +34,13 @@ dependencies = [
   "scipy",
   "bleak>=0.21.0",
 ]
+
+[project.scripts]
+hermes-cli = "hermes.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hermes*"]
 
 [project.urls]
 Homepage = "https://maximyudayev.github.io/hermes"
