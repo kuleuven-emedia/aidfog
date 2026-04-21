@@ -101,29 +101,86 @@ class BudsPipeline(Pipeline):
 
         stream_out_spec = {"buds": buds}
 
-        _trace("pre super: importing aidfog_ai to warm torch...")
         import time as _t
+        import threading as _threading
+        from collections import OrderedDict as _OrderedDict
+        from hermes.base.nodes.node import Node as _Node
+        from hermes.base.storage.storage import Storage as _Storage
+        from hermes.utils.di_utils import search_module_class as _search
+
+        _trace("pre: importing aidfog_ai to warm torch...")
         _t0 = _t.time()
-        import hermes.aidfog_ai  # triggers torch import
+        import hermes.aidfog_ai  # noqa
         _trace(f"aidfog_ai imported in {_t.time()-_t0:.1f}s")
-        _trace("pre super: importing hermes.base.storage.storage...")
+
+        # Replicate Pipeline.__init__ step by step with traces.
+        _trace("step 1: calling Node.__init__...")
         _t0 = _t.time()
-        import hermes.base.storage.storage  # noqa
-        _trace(f"storage imported in {_t.time()-_t0:.1f}s")
-        _trace("calling super().__init__() (create streams + Storage + storage thread)...")
-        _t0 = _t.time()
-        super().__init__(
+        _Node.__init__(
+            self,
             host_ip=host_ip,
-            stream_out_spec=stream_out_spec,
-            stream_in_specs=stream_in_specs,
-            logging_spec=logging_spec,
-            is_async_generate=True,
-            port_pub=port_pub,
-            port_sub=port_sub,
             port_sync=port_sync,
             port_killsig=port_killsig,
+            ref_time=logging_spec.ref_time_s,
         )
-        _trace(f"super().__init__() returned in {_t.time()-_t0:.1f}s; about to enter state machine")
+        _trace(f"step 1 done in {_t.time()-_t0:.1f}s")
+
+        _trace("step 2: setting instance attrs...")
+        self._port_pub = port_pub
+        self._port_sub = port_sub
+        self._is_async_generate = True
+        self._is_more_data_in = True
+        self._is_more_data_out = True
+        self._publish_fn = lambda tag, **kwargs: None
+        _trace("step 2 done")
+
+        _trace("step 3: creating out Stream (BudsStream)...")
+        _t0 = _t.time()
+        self._out_stream = self.create_stream(stream_out_spec)
+        _trace(f"step 3 done in {_t.time()-_t0:.1f}s")
+
+        _trace("step 4: setting up in_streams dicts and poll fns...")
+        self._in_streams = _OrderedDict()
+        self._poll_data_fn = self._poll_data_packets
+        self._on_poll_fn = self._on_poll_in_out if self._is_async_generate else self._on_poll_in_only
+        self._is_producer_ended = _OrderedDict()
+        _trace("step 4 done")
+
+        _trace(f"step 5: creating {len(stream_in_specs)} in-stream(s)...")
+        for i, stream_spec in enumerate(stream_in_specs):
+            module_name = stream_spec["package"]
+            class_name = stream_spec["class"]
+            specs = stream_spec["settings"]
+            _trace(f"  5.{i}a: search_module_class({module_name}, {class_name})...")
+            _t0 = _t.time()
+            class_type = _search(module_name, class_name)
+            _trace(f"  5.{i}a done in {_t.time()-_t0:.1f}s")
+            _trace(f"  5.{i}b: {class_name}.create_stream(...)...")
+            _t0 = _t.time()
+            class_object = class_type.create_stream(specs)
+            _trace(f"  5.{i}b done in {_t.time()-_t0:.1f}s")
+            self._in_streams.setdefault(class_type._log_source_tag(), class_object)
+            self._is_producer_ended.setdefault(class_type._log_source_tag(), False)
+        _trace("step 5 done")
+
+        _trace("step 6: creating Storage...")
+        _t0 = _t.time()
+        self._storage = _Storage(self._log_source_tag(), logging_spec)
+        _trace(f"step 6 done in {_t.time()-_t0:.1f}s")
+
+        _trace("step 7: starting storage thread...")
+        _t0 = _t.time()
+        self._storage_thread = _threading.Thread(
+            target=self._storage,
+            args=(
+                _OrderedDict([
+                    (self._log_source_tag(), self._out_stream),
+                    *self._in_streams.items(),
+                ]),
+            ),
+        )
+        self._storage_thread.start()
+        _trace(f"step 7 done in {_t.time()-_t0:.1f}s; pipeline ctor finished")
 
     @classmethod
     def create_stream(cls, stream_spec: dict) -> BudsStream:
