@@ -108,4 +108,8 @@ pipeline_specs:
         - package: "aidfog_ai"
           class: "TorchPipeline"
           settings:
+            # TorchStream needs both `classes` and `sampling_rate_hz` — must match
+            # the values in the TorchPipeline producer block above, or BudsPipeline
+            # will fail silently at startup on Windows spawn (TypeError is swallowed).
+            classes: ["no_fog", "fog"]
             sampling_rate_hz: 60

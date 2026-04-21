@@ -157,7 +157,13 @@ class BudsPipeline(Pipeline):
             _trace(f"  5.{i}a done in {_t.time()-_t0:.1f}s")
             _trace(f"  5.{i}b: {class_name}.create_stream(...)...")
             _t0 = _t.time()
-            class_object = class_type.create_stream(specs)
+            try:
+                class_object = class_type.create_stream(specs)
+            except Exception as e:
+                # Windows multiprocessing + spawn swallows tracebacks from child
+                # subprocesses. Log explicitly so a missing YAML setting is visible.
+                _trace(f"  5.{i}b FAILED: {type(e).__name__}: {e}")
+                raise
             _trace(f"  5.{i}b done in {_t.time()-_t0:.1f}s")
             self._in_streams.setdefault(class_type._log_source_tag(), class_object)
             self._is_producer_ended.setdefault(class_type._log_source_tag(), False)
