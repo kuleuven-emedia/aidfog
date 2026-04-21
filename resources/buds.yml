@@ -103,7 +103,7 @@ pipeline_specs:
           sampling_rate_hz: 100
           threshold_high: 0.7
           threshold_low: 0.3
-          dt: 0.01
+          dt: 0.5            # BudsHandler status poll period (seconds); 100Hz polling destabilised BLE on Windows
       stream_in_specs:
         - package: "aidfog_ai"
           class: "TorchPipeline"
