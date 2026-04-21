@@ -10,6 +10,7 @@
 codec_name: "libmp3lame"
 pix_format: "s16"
 num_cpu: 1
-input_options: {}
+input_options:
+  f: "s16le"    # raw PCM stdin has no container; tell FFmpeg the format explicitly
 output_options:
   audio_bitrate: "128k"
