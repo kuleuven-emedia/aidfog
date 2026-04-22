@@ -15,7 +15,9 @@ Supported FFmpeg backends (set via ffmpeg_backend in buds.yml):
   - "pulse"       : Linux (PulseAudio)
 """
 
+import json
 import logging
+import os
 
 import numpy as np
 
@@ -73,6 +75,14 @@ class AudioProducer(Producer):
         self._tag: str = "%s.data" % self._log_source_tag()
 
         self._ffmpeg_process = None
+        self._t_ffmpeg_start_s: float | None = None
+        # Resolve where to write the capture-start anchor JSON next to the HDF5.
+        self._meta_path: str | None = None
+        log_dir = getattr(logging_spec, "log_dir", None)
+        if log_dir:
+            self._meta_path = os.path.join(
+                log_dir, "%s_meta.json" % self._log_source_tag()
+            )
 
         stream_out_spec = {
             "sampling_rate_hz": sampling_rate_hz,
@@ -106,6 +116,7 @@ class AudioProducer(Producer):
             input_name = self._device_name
 
         try:
+            self._t_ffmpeg_start_s = get_time()
             self._ffmpeg_process = (
                 ffmpeg
                 .input(
@@ -124,15 +135,45 @@ class AudioProducer(Producer):
                 .run_async(pipe_stdout=True)
             )
             logger.info(
-                "FFmpeg capture started: %s via %s at %d Hz",
+                "FFmpeg capture started: %s via %s at %d Hz (t=%.6f)",
                 self._device_name,
                 self._ffmpeg_backend,
                 self._audio_sampling_rate_hz,
+                self._t_ffmpeg_start_s,
             )
+            self._write_meta()
             return True
         except Exception as e:
             logger.error("Failed to start FFmpeg capture: %s", e)
             return False
+
+    def _write_meta(self) -> None:
+        """Persist the FFmpeg capture-start wall-clock time and audio params.
+
+        The MP3 produced by Storage is sample-aligned with FFmpeg's read of the
+        mic hardware; sample index i in the MP3 corresponds (modulo a small
+        FFmpeg startup delay) to wall-clock t_ffmpeg_start + i/sampling_rate.
+        Persisting t_ffmpeg_start here lets post-hoc analysis convert MP3
+        onsets to wall-clock and correlate against BLE op-log timestamps.
+        """
+        if not self._meta_path or self._t_ffmpeg_start_s is None:
+            return
+        try:
+            os.makedirs(os.path.dirname(self._meta_path), exist_ok=True)
+            meta = {
+                "t_ffmpeg_start_s": self._t_ffmpeg_start_s,
+                "sampling_rate_hz": self._audio_sampling_rate_hz,
+                "num_channels": self._num_channels,
+                "chunk_size": self._chunk_size,
+                "sample_format": self._sample_format,
+                "device_name": self._device_name,
+                "ffmpeg_backend": self._ffmpeg_backend,
+            }
+            with open(self._meta_path, "w") as f:
+                json.dump(meta, f, indent=2)
+            logger.info("Wrote audio meta to %s", self._meta_path)
+        except Exception as e:
+            logger.error("Failed to write audio meta: %s", e)
 
     def _ping_device(self) -> None:
         return None
