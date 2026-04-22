@@ -93,9 +93,73 @@ def softmax_2class(logits: np.ndarray) -> np.ndarray:
     return (e / e.sum(axis=1, keepdims=True))[:, 1]
 
 
+def synthesize_stream(
+    duration_s: float = 60.0,
+    fs_hz: float = 60.0,
+    n_episodes: int = 4,
+    n_glitches: int = 6,
+    seed: int = 42,
+) -> np.ndarray:
+    """Generate a realistic-looking FoG probability stream for FSM testing.
+
+    Background noise around 0.05; FoG episodes with smooth on/off ramps and
+    intra-episode probability dips that the FSM's CUEING/TAIL states must
+    handle gracefully; brief noise glitches the FSM's IDLE state's
+    sustained-entry rule must reject.
+    """
+    rng = np.random.default_rng(seed)
+    n = int(duration_s * fs_hz)
+    p = rng.normal(loc=0.05, scale=0.02, size=n).clip(0.0, 1.0).astype(np.float32)
+
+    # Episodes: random duration 3-12 s, evenly spaced.
+    spacing = duration_s / (n_episodes + 1)
+    for k in range(n_episodes):
+        center_s = spacing * (k + 1)
+        ep_dur = float(rng.uniform(3.0, 12.0))
+        ramp_s = 0.4
+        ep_start_s = center_s - ep_dur / 2
+        ep_end_s = ep_start_s + ep_dur
+        # Smooth ramp up/down.
+        for i in range(n):
+            t = i / fs_hz
+            if t < ep_start_s or t > ep_end_s + ramp_s:
+                continue
+            if t < ep_start_s + ramp_s:
+                w = (t - ep_start_s) / ramp_s
+            elif t > ep_end_s:
+                w = max(0.0, 1.0 - (t - ep_end_s) / ramp_s)
+            else:
+                w = 1.0
+            target = 0.88 + rng.normal(0.0, 0.03)
+            p[i] = max(p[i], 0.05 + w * (target - 0.05))
+        # Intra-episode dips: 1-2 short drops that should NOT release the cue.
+        n_dips = int(rng.integers(1, 3))
+        for _ in range(n_dips):
+            dip_t = float(rng.uniform(ep_start_s + 0.5, ep_end_s - 0.5))
+            dip_dur = float(rng.uniform(0.10, 0.25))
+            dip_start = int(dip_t * fs_hz)
+            dip_end = int((dip_t + dip_dur) * fs_hz)
+            p[dip_start:dip_end] = rng.uniform(0.15, 0.35)
+
+    # Random short glitches (single-frame to 5-frame spikes) outside episodes.
+    for _ in range(n_glitches):
+        g_idx = int(rng.uniform(0, n - 5))
+        g_len = int(rng.integers(1, 5))
+        p[g_idx:g_idx + g_len] = rng.uniform(0.75, 0.98)
+
+    return p.clip(0.0, 1.0)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("trial_dir")
+    parser.add_argument("trial_dir", nargs="?", default=None,
+                        help="Path to trial folder; omit to use --synthetic")
+    parser.add_argument("--synthetic", action="store_true",
+                        help="Generate a synthetic probability stream instead of reading a trial")
+    parser.add_argument("--syn-duration", type=float, default=60.0)
+    parser.add_argument("--syn-episodes", type=int, default=4)
+    parser.add_argument("--syn-glitches", type=int, default=6)
+    parser.add_argument("--syn-seed", type=int, default=42)
     parser.add_argument("--start", type=float, default=None)
     parser.add_argument("--end", type=float, default=None)
     parser.add_argument("--output", default=None)
@@ -109,28 +173,49 @@ def main():
                         help="4-state: lockout frames after TAIL ends (default 60 = 1s @60Hz)")
     args = parser.parse_args()
 
-    ai_path = os.path.join(args.trial_dir, "aidfog_ai.hdf5")
-    if not os.path.exists(ai_path):
-        print(f"missing {ai_path}", file=sys.stderr)
-        sys.exit(1)
+    if args.synthetic or args.trial_dir is None:
+        # Synthetic mode — bypass HDF5 entirely.
+        fs = 60.0
+        fog_prob = synthesize_stream(
+            duration_s=args.syn_duration,
+            fs_hz=fs,
+            n_episodes=args.syn_episodes,
+            n_glitches=args.syn_glitches,
+            seed=args.syn_seed,
+        )
+        n = len(fog_prob)
+        pt = np.linspace(0, args.syn_duration, n, endpoint=False)
+        # Fake "logits" for the raw_argmax track and downstream softmax compat.
+        raw_argmax = (fog_prob >= 0.5).astype(np.uint8)
+        smoothed = np.zeros_like(raw_argmax)  # n/a in synthetic mode
+        synthetic_out_dir = os.path.join(".", "data", "synthetic_fsm")
+        os.makedirs(synthetic_out_dir, exist_ok=True)
+        default_label = (f"synthetic_d{int(args.syn_duration)}s_"
+                         f"e{args.syn_episodes}_g{args.syn_glitches}_s{args.syn_seed}")
+        trial_label = default_label
+    else:
+        ai_path = os.path.join(args.trial_dir, "aidfog_ai.hdf5")
+        if not os.path.exists(ai_path):
+            print(f"missing {ai_path}", file=sys.stderr)
+            sys.exit(1)
 
-    with h5py.File(ai_path, "r") as f:
-        pt = f["aidfog_ai/pytorch-worker/process_time_s"][:].flatten()
-        logits = f["aidfog_ai/pytorch-worker/logits"][:]
-        smoothed = f["aidfog_ai/pytorch-worker/prediction"][:].flatten()
-    mask = pt > 0
-    pt = pt[mask]
-    logits = logits[mask]
-    smoothed = smoothed[mask]
-
-    fog_prob = softmax_2class(logits)
-    raw_argmax = (logits[:, 1] > logits[:, 0]).astype(np.uint8)
+        with h5py.File(ai_path, "r") as f:
+            pt = f["aidfog_ai/pytorch-worker/process_time_s"][:].flatten()
+            logits = f["aidfog_ai/pytorch-worker/logits"][:]
+            smoothed = f["aidfog_ai/pytorch-worker/prediction"][:].flatten()
+        mask = pt > 0
+        pt = pt[mask]
+        logits = logits[mask]
+        smoothed = smoothed[mask]
+        fog_prob = softmax_2class(logits)
+        raw_argmax = (logits[:, 1] > logits[:, 0]).astype(np.uint8)
+        trial_label = os.path.basename(os.path.normpath(args.trial_dir))
 
     state_2 = fsm_2state(fog_prob, args.th_high, args.th_low)
     state_4 = fsm_4state(fog_prob, args.th_high, args.th_low,
                         args.entry_consec, args.tail_frames, args.cooldown_frames)
 
-    t = pt - pt[0]
+    t = pt if args.synthetic or args.trial_dir is None else (pt - pt[0])
 
     # Count cue events (rising edges into CUEING).
     edges_2 = int(np.sum((state_2[1:] == 1) & (state_2[:-1] != 1)))
@@ -202,11 +287,15 @@ def main():
     x_end = args.end if args.end is not None else t[-1]
     axes[0].set_xlim(x_start, x_end)
 
-    title = os.path.basename(os.path.normpath(args.trial_dir))
-    fig.suptitle(f"FSM strategy comparison — {title}", fontsize=12, y=0.995)
+    fig.suptitle(f"FSM strategy comparison — {trial_label}", fontsize=12, y=0.995)
     fig.tight_layout()
 
-    out_path = args.output or os.path.join(args.trial_dir, "fsm_comparison.png")
+    if args.output:
+        out_path = args.output
+    elif args.synthetic or args.trial_dir is None:
+        out_path = os.path.join(synthetic_out_dir, f"{trial_label}.png")
+    else:
+        out_path = os.path.join(args.trial_dir, "fsm_comparison.png")
     fig.savefig(out_path, dpi=120)
     print(f"wrote {out_path}")
 
