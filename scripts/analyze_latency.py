@@ -65,6 +65,9 @@ def main():
                         help="Onset threshold in MADs above median (default 8)")
     parser.add_argument("--refractory-ms", type=float, default=50.0,
                         help="Min gap between onsets in ms (default 50)")
+    parser.add_argument("--sustained-blocks", type=int, default=5,
+                        help="Require N consecutive blocks above threshold "
+                             "before counting as an onset (default 5)")
     args = parser.parse_args()
 
     meta_path = os.path.join(args.trial_dir, "aidfog_audio_meta.json")
@@ -135,11 +138,17 @@ def main():
             continue
         w = env[start_block:end_block]
         win_max = float(w.max())
-        crossing = np.where(w > threshold)[0]
-        if len(crossing) == 0:
+        # Sustained-crossing: find the first index where the next K blocks
+        # are all above threshold. Rejects single-block noise spikes.
+        K = max(1, args.sustained_blocks)
+        first = -1
+        for j in range(len(w) - K + 1):
+            if np.all(w[j:j + K] > threshold):
+                first = j
+                break
+        if first < 0:
             print(f"{i:>3}  {t_ble:>20.6f}  {win_max:>8.1f}  {'no crossing':>12}  {'n/a':>10}")
         else:
-            first = int(crossing[0])
             t_audio = t_ffmpeg_start + (start_block + first) * seconds_per_block
             delta_ms = (t_audio - t_ble) * 1000
             deltas.append(delta_ms)
