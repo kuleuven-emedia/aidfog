@@ -1,0 +1,62 @@
+############
+# Replay + AI only — for offline FSM design work.
+# No earbuds, no mic, no hardware. Targets subject 010 (high-FoG trials).
+# Output HDF5 can then be analysed with scripts/compare_fsm_strategies.py.
+############
+
+host_ip: "127.0.0.1"
+is_master_broker: True
+
+remote_subscriber_ips: []
+remote_publisher_ips: []
+connections: []
+
+is_remote_kill: False
+remote_kill_ip: null
+
+
+logging_spec:
+  stream_period_s     : 30
+  stream_hdf5         : True
+  stream_csv          : False
+  stream_video        : False
+  stream_audio        : False
+  dump_csv            : False
+  dump_hdf5           : False
+  dump_video          : False
+  dump_audio          : False
+
+video_codec_config_filepath : null
+audio_codec_config_filepath : null
+
+
+producer_specs:
+  - package: "aidfog_replay"
+    class: "ImuReplayProducer"
+    settings:
+      imu_root: "./data/imu"
+      annot_root: "./data/annotation"
+      sampling_rate_hz: 60
+      original_rate_hz: 64
+      sensor_indices: [0, 5, 6, 2, 3]
+      loop: false                   # one pass only — we want a finite trial
+      subject_filter: ["010"]       # FoG-richest subject per scan_dataset.py
+      # trial_filter: ["TUG-ST_1"]  # uncomment to drill into a single trial
+
+
+consumer_specs: []
+
+
+pipeline_specs:
+  - package: "aidfog_ai"
+    class: "TorchPipeline"
+    settings:
+      model_path: "./resources/tcn_model_60fps.pth"
+      input_size: [5, 6]
+      output_classes: ["no_fog", "fog"]
+      sampling_rate_hz: 60
+      stream_in_specs:
+        - package: "aidfog_replay"
+          class: "ImuReplayProducer"
+          settings:
+            sampling_rate_hz: 60

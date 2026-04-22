@@ -47,6 +47,8 @@ class ImuReplayProducer(Producer):
         original_rate_hz: int = 64,
         sensor_indices: list = None,
         loop: bool = True,
+        subject_filter: list = None,
+        trial_filter: list = None,
         port_pub: str = PORT_BACKEND,
         port_sync: str = PORT_SYNC_HOST,
         port_killsig: str = PORT_KILL,
@@ -61,6 +63,12 @@ class ImuReplayProducer(Producer):
         self._original_hz = original_rate_hz
         self._sensor_indices = sensor_indices
         self._loop = loop
+        self._subject_filter = (
+            set(subject_filter) if subject_filter else None
+        )
+        self._trial_filter = (
+            [s.lower() for s in trial_filter] if trial_filter else None
+        )
         self._period = 1.0 / sampling_rate_hz
         self._tag: str = "%s.data" % self._log_source_tag()
         self._next_period: float = 0.0
@@ -102,9 +110,15 @@ class ImuReplayProducer(Producer):
             subj_annot_path = os.path.join(self._annot_root, subj)
             if subj in skip_list or not os.path.isdir(subj_annot_path):
                 continue
+            if self._subject_filter and subj not in self._subject_filter:
+                continue
 
             for fn in sorted(os.listdir(subj_annot_path)):
                 if "TUG" not in fn:
+                    continue
+                if self._trial_filter and not any(
+                    needle in fn.lower() for needle in self._trial_filter
+                ):
                     continue
 
                 annot_file = os.path.join(subj_annot_path, fn)
