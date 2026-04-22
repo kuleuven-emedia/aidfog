@@ -114,35 +114,49 @@ def main():
         print("no successful start_cue entries in op log")
         return
 
-    print(f"{'#':>3}  {'T5 (BLE write)':>20}  {'T7 (audio onset)':>20}"
-          f"  {'Δ (T7-T5) ms':>14}  {'envelope':>10}")
-    print("-" * 75)
-    for i, onset_idx in enumerate(onsets):
-        t_audio = t_ffmpeg_start + onset_idx * seconds_per_block
-        # Pair with the closest start_cue at or just before the audio onset.
-        candidates = [s for s in starts if s["timestamp"] <= t_audio + 0.05]
-        if not candidates:
-            continue
-        match = max(candidates, key=lambda s: s["timestamp"])
-        t_ble = match["timestamp"]
-        delta_ms = (t_audio - t_ble) * 1000
-        print(f"{i:>3}  {t_ble:>20.6f}  {t_audio:>20.6f}"
-              f"  {delta_ms:>14.2f}  {env[onset_idx]:>10.1f}")
+    # Per-cue diagnostic: for each BLE start_cue, look at the audio envelope
+    # in a window after it. Report the first threshold crossing AND the max,
+    # so we can tell whether "no onset" means "no audio" or "threshold too high".
+    search_window_ms = 200.0
+    search_window_blocks = int(search_window_ms / args.window_ms)
 
-    # Summary stats over all paired deltas.
+    print(f"\nper-cue window analysis (first {search_window_ms:.0f} ms after each start_cue):")
+    print(f"{'#':>3}  {'T5 (BLE write)':>20}  {'win max':>8}  "
+          f"{'first-cross':>12}  {'Δ (ms)':>10}")
+    print("-" * 70)
+
     deltas = []
-    for onset_idx in onsets:
-        t_audio = t_ffmpeg_start + onset_idx * seconds_per_block
-        candidates = [s for s in starts if s["timestamp"] <= t_audio + 0.05]
-        if candidates:
-            match = max(candidates, key=lambda s: s["timestamp"])
-            deltas.append(1000 * (t_audio - match["timestamp"]))
+    for i, s in enumerate(starts):
+        t_ble = s["timestamp"]
+        start_block = int((t_ble - t_ffmpeg_start) / seconds_per_block)
+        end_block = min(start_block + search_window_blocks, len(env))
+        if start_block < 0 or start_block >= len(env):
+            print(f"{i:>3}  {t_ble:>20.6f}  (outside MP3)")
+            continue
+        w = env[start_block:end_block]
+        win_max = float(w.max())
+        crossing = np.where(w > threshold)[0]
+        if len(crossing) == 0:
+            print(f"{i:>3}  {t_ble:>20.6f}  {win_max:>8.1f}  {'no crossing':>12}  {'n/a':>10}")
+        else:
+            first = int(crossing[0])
+            t_audio = t_ffmpeg_start + (start_block + first) * seconds_per_block
+            delta_ms = (t_audio - t_ble) * 1000
+            deltas.append(delta_ms)
+            print(f"{i:>3}  {t_ble:>20.6f}  {win_max:>8.1f}  {first*args.window_ms:>10.1f}ms"
+                  f"  {delta_ms:>10.2f}")
+
     if deltas:
         print()
         print(f"summary: n={len(deltas)} "
               f"min={min(deltas):.2f} ms  "
               f"median={float(np.median(deltas)):.2f} ms  "
               f"max={max(deltas):.2f} ms")
+    else:
+        print("\nno cues had an audio crossing in the search window.")
+        print(f"max envelope across the whole recording: {env.max():.1f}")
+        print(f"threshold used: {threshold:.1f}")
+        print("possible causes: mic not near earbud, volume too low, or threshold too high.")
 
 
 if __name__ == "__main__":
