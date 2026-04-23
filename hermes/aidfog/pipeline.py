@@ -22,7 +22,7 @@ from hermes.utils.zmq_utils import (
 
 from .controller import BudsHandler
 from .stream import BudsStream
-from .utils.types import CueState
+from .utils.types import CueState, CueingControlConfig
 
 
 class BudsPipeline(Pipeline):
@@ -55,10 +55,20 @@ class BudsPipeline(Pipeline):
         self._cueing_command_queue: Queue[dict] = Queue()
         self._cueing_status_queue: Queue[tuple[float, int]] = Queue()
 
-        # FSM state for cueing control.
+        # 4-state cueing FSM with literature-informed defaults (see
+        # CueingControlConfig docstring). Overridable per-run via the
+        # `cueing_control` block in buds.yml.
+        ctrl_kwargs = buds.get("cueing_control", {})
+        # Back-compat: promote legacy threshold_high/threshold_low keys.
+        if "threshold_high" in buds and "th_high" not in ctrl_kwargs:
+            ctrl_kwargs.setdefault("th_high", buds["threshold_high"])
+        if "threshold_low" in buds and "th_low" not in ctrl_kwargs:
+            ctrl_kwargs.setdefault("th_low", buds["threshold_low"])
+        self._ctrl = CueingControlConfig(**ctrl_kwargs)
         self._cue_state = CueState.IDLE
-        self._threshold_high: float = buds.get("threshold_high", 0.7)
-        self._threshold_low: float = buds.get("threshold_low", 0.3)
+        self._consec_high = 0
+        self._tail_remaining = 0
+        self._cooldown_remaining = 0
 
         self._is_ready_event = Event()
         self._is_keep_data_event = Event()
@@ -117,24 +127,56 @@ class BudsPipeline(Pipeline):
         self._is_keep_data_event.set()
 
     def _process_data(self, topic: str, msg: dict) -> None:
-        """Receive FoG detection results from upstream AI node."""
+        """4-state cueing FSM driven by upstream AI FoG probability.
+
+        States: IDLE → CUEING → TAIL → COOLDOWN → IDLE.
+          IDLE: count consecutive high-prob frames; only transition to CUEING
+                after `entry_consec` in a row (rejects noise glitches and the
+                model's input-buffer warmup transient).
+          CUEING: send START once on entry; stay here through mid-episode dips
+                  (probability may briefly drop below th_low without leaving).
+          TAIL: probability dropped; hold for `tail_frames` before releasing.
+                If probability rises back above th_high, fall back to CUEING.
+          COOLDOWN: send STOP on entry; lock out re-trigger for `cooldown_frames`.
+        """
         data = msg.get("data", {})
         pytorch_data = data.get("pytorch-worker", {})
         logits = pytorch_data.get("logits", [0.0, 0.0])
-        fog_prob = float(logits[1])
+        # Softmax so th_high / th_low are bounded in [0, 1] — matches the
+        # offline simulator in scripts/compare_fsm_strategies.py.
+        lg = np.asarray(logits, dtype=np.float64)
+        shifted = lg - lg.max()
+        ex = np.exp(shifted)
+        fog_prob = float((ex / ex.sum())[1])
 
         if self._cue_state == CueState.IDLE:
-            if fog_prob >= self._threshold_high:
+            self._consec_high = (
+                self._consec_high + 1 if fog_prob >= self._ctrl.th_high else 0
+            )
+            if self._consec_high >= self._ctrl.entry_consec:
                 self._cue_state = CueState.CUEING
-                self._cueing_command_queue.put({
-                    "action": "start",
-                    "tone_id": 0,
-                    "volume": 80,
-                })
+                self._consec_high = 0
+                self._cueing_command_queue.put(
+                    {"action": "start", "tone_id": 0, "volume": 80}
+                )
         elif self._cue_state == CueState.CUEING:
-            if fog_prob < self._threshold_low:
+            if fog_prob < self._ctrl.th_low:
+                self._cue_state = CueState.TAIL
+                self._tail_remaining = self._ctrl.tail_frames
+        elif self._cue_state == CueState.TAIL:
+            if fog_prob >= self._ctrl.th_high:
+                self._cue_state = CueState.CUEING
+            else:
+                self._tail_remaining -= 1
+                if self._tail_remaining <= 0:
+                    self._cue_state = CueState.COOLDOWN
+                    self._cooldown_remaining = self._ctrl.cooldown_frames
+                    self._cueing_command_queue.put({"action": "stop"})
+        elif self._cue_state == CueState.COOLDOWN:
+            self._cooldown_remaining -= 1
+            if self._cooldown_remaining <= 0:
                 self._cue_state = CueState.IDLE
-                self._cueing_command_queue.put({"action": "stop"})
+                self._consec_high = 0
 
     def _generate_data(self) -> None:
         """Forward cueing status data to HERMES middleware for logging."""

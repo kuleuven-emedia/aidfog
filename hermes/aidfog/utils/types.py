@@ -80,7 +80,23 @@ class CueingConfig:
 class CueState(Enum):
     IDLE = "IDLE"
     CUEING = "CUEING"
-    COOLDOWN = "COOLDOWN"
+    TAIL = "TAIL"          # prob dropped, hold cue briefly in case it's a glitch
+    COOLDOWN = "COOLDOWN"  # episode ended, lock out re-trigger
+
+
+@dataclass
+class CueingControlConfig:
+    """Tunable parameters for the 4-state cueing FSM.
+
+    Defaults: informed by Borzì et al. 2022 episode distribution (50% < 5 s,
+    90% < 20 s) and the project's existing 2-state thresholds. All durations
+    in frames at the AI's sampling rate (typically 60 Hz), so 30 frames ≈ 500 ms.
+    """
+    th_high: float = 0.7
+    th_low: float = 0.3
+    entry_consec: int = 3          # frames ≥ th_high before IDLE → CUEING
+    tail_frames: int = 30          # frames to hold in TAIL before → COOLDOWN (~500 ms @ 60 Hz)
+    cooldown_frames: int = 60      # frames to lock out after TAIL (~1 s @ 60 Hz)
 
 
 @dataclass

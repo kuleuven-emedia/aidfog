@@ -10,6 +10,7 @@ from .types import (
     CUE_STATUS_CUEING,
     CUE_STATUS_ERROR,
     CueingConfig,
+    CueingControlConfig,
     CueState,
     CueEvent,
     CueingAction,

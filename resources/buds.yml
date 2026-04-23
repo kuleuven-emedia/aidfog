@@ -101,9 +101,13 @@ pipeline_specs:
             right: "12:34:56:C2:A2:30"
             left:  "12:34:56:C2:A2:31"
           sampling_rate_hz: 100
-          threshold_high: 0.7
-          threshold_low: 0.3
           dt: 0.5            # BudsHandler status poll period (seconds); 100Hz polling destabilised BLE on Windows
+          cueing_control:    # 4-state FSM parameters; see utils/types.py:CueingControlConfig
+            th_high: 0.7
+            th_low: 0.3
+            entry_consec: 3        # IDLE→CUEING requires 3 consecutive high-prob frames (rejects startup transient + glitches)
+            tail_frames: 30        # ~500 ms @ 60 Hz — hold cue through mid-episode dips before releasing
+            cooldown_frames: 60    # ~1 s @ 60 Hz — lock out re-trigger after episode ends
       stream_in_specs:
         - package: "aidfog_ai"
           class: "TorchPipeline"
