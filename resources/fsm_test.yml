@@ -1,0 +1,86 @@
+############
+# FSM hardware smoke test config — replay + AI + buds (no microphone).
+# Use this when validating the cueing FSM with the earbud but without
+# the Rode mic available. Identical to buds.yml minus AudioProducer.
+############
+
+host_ip: "127.0.0.1"
+is_master_broker: True
+
+remote_subscriber_ips: []
+remote_publisher_ips: []
+connections: []
+
+is_remote_kill: False
+remote_kill_ip: null
+
+
+logging_spec:
+  stream_period_s     : 30
+
+  stream_hdf5         : True
+  stream_csv          : False
+  stream_video        : False
+  stream_audio        : False
+
+  dump_csv            : False
+  dump_hdf5           : False
+  dump_video          : False
+  dump_audio          : False
+
+video_codec_config_filepath : null
+audio_codec_config_filepath : null
+
+
+producer_specs:
+  - package: "aidfog_replay"
+    class: "ImuReplayProducer"
+    settings:
+      imu_root: "./data/imu"
+      annot_root: "./data/annotation"
+      sampling_rate_hz: 60
+      original_rate_hz: 64
+      sensor_indices: [0, 5, 6, 2, 3]
+      loop: true
+
+
+consumer_specs: []
+
+
+pipeline_specs:
+  - package: "aidfog_ai"
+    class: "TorchPipeline"
+    settings:
+      model_path: "./resources/tcn_model_60fps.pth"
+      input_size: [5, 6]
+      output_classes: ["no_fog", "fog"]
+      sampling_rate_hz: 60
+      stream_in_specs:
+        - package: "aidfog_replay"
+          class: "ImuReplayProducer"
+          settings:
+            sampling_rate_hz: 60
+
+  - package: "aidfog"
+    class: "BudsPipeline"
+    settings:
+      stream_out_spec:
+        buds:
+          device_name: "D&D TECH"
+          device_mapping:
+            right: "12:34:56:C2:A2:30"
+            left:  "12:34:56:C2:A2:31"
+          sampling_rate_hz: 100
+          dt: 0.5
+          cueing_control:
+            th_high: 0.7
+            th_low: 0.3
+            entry_consec: 3
+            tail_frames: 30
+            cooldown_frames: 60
+      stream_in_specs:
+        - package: "aidfog_ai"
+          class: "TorchPipeline"
+          settings:
+            classes: ["no_fog", "fog"]
+            sampling_rate_hz: 60
