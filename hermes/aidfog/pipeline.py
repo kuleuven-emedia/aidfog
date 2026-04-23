@@ -165,7 +165,13 @@ class BudsPipeline(Pipeline):
                 self._tail_remaining = self._ctrl.tail_frames
         elif self._cue_state == CueState.TAIL:
             if fog_prob >= self._ctrl.th_high:
+                # Probability recovered before TAIL expired — restart cue.
+                # The firmware auto-stops at duration_ms (default 500ms), so
+                # if the dip exceeded that we'd be silent without re-firing.
                 self._cue_state = CueState.CUEING
+                self._cueing_command_queue.put(
+                    {"action": "start", "tone_id": 0, "volume": 80}
+                )
             else:
                 self._tail_remaining -= 1
                 if self._tail_remaining <= 0:
