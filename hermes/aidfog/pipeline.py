@@ -138,6 +138,14 @@ class BudsPipeline(Pipeline):
           TAIL: probability dropped; hold for `tail_frames` before releasing.
                 If probability rises back above th_high, fall back to CUEING.
           COOLDOWN: send STOP on entry; lock out re-trigger for `cooldown_frames`.
+
+        TODO (B3, post-2026-04-26): refactor to consume `binary` field from
+        Alex's HysteresisFilter once integrated into hermes.aidfog_ai. The
+        `th_high` / `th_low` softmax branches drop out (entry/exit debouncing
+        is upstream); set `entry_consec=1` to avoid stacking with Alex's
+        `enter_thresh`. TAIL and COOLDOWN remain — they are this FSM's
+        contribution on top of Alex's hysteresis. See VAYALET_FEEDBACK_ACTION_PLAN
+        §A3.5.
         """
         data = msg.get("data", {})
         pytorch_data = data.get("pytorch-worker", {})
