@@ -76,8 +76,8 @@ pipeline_specs:
             th_high: 0.7
             th_low: 0.3
             entry_consec: 3
-            tail_frames: 30
-            cooldown_frames: 60
+            cueing_tail_frames: 30
+            refractory_frames: 60
       stream_in_specs:
         - package: "aidfog_ai"
           class: "TorchPipeline"

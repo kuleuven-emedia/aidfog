@@ -11,7 +11,7 @@ Tracks (top to bottom):
   2. Raw argmax — the noisy 1/0 stream the model emits per frame
   3. Smoothed prediction — what TorchPipeline's smooth() function outputs
   4. 2-state FSM (current production behaviour: enter @ prob>=0.7, exit @ prob<0.3)
-  5. 4-state FSM (proposed: IDLE / CUEING / TAIL / COOLDOWN with sustained entry)
+  5. 4-state FSM (proposed: IDLE / CUEING / CUEING_TAIL / REFRACTORY with sustained entry)
 
 Usage:
     python scripts/compare_fsm_strategies.py path/to/trial_folder
@@ -51,7 +51,11 @@ def fsm_4state(
     cooldown_frames=60,    # ~1 s at 60 Hz
 ) -> np.ndarray:
     """Proposed 4-state FSM. Per-frame state:
-       0 = IDLE, 1 = CUEING, 2 = TAIL, 3 = COOLDOWN.
+       0 = IDLE, 1 = CUEING, 2 = CUEING_TAIL, 3 = REFRACTORY.
+
+    Argument names `tail_frames` / `cooldown_frames` kept for compatibility with
+    earlier reports; in the runtime FSM they are `cueing_tail_frames` and
+    `refractory_frames`.
     """
     state = np.zeros(len(fog_prob), dtype=np.uint8)
     cur = 0
@@ -275,7 +279,7 @@ def main():
     ax.step(t, state_4, where="post", color="tab:green", lw=1.0)
     ax.set_ylim(-0.2, 3.2)
     ax.set_yticks([0, 1, 2, 3])
-    ax.set_yticklabels(["IDLE", "CUEING", "TAIL", "COOLDOWN"])
+    ax.set_yticklabels(["IDLE", "CUEING", "CUEING_TAIL", "REFRACTORY"])
     ax.set_ylabel("4-state\nFSM")
     ax.set_xlabel("time since trial start (s)")
     ax.grid(True, alpha=0.3)

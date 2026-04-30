@@ -80,8 +80,8 @@ class CueingConfig:
 class CueState(Enum):
     IDLE = "IDLE"
     CUEING = "CUEING"
-    TAIL = "TAIL"          # prob dropped, hold cue briefly in case it's a glitch
-    COOLDOWN = "COOLDOWN"  # episode ended, lock out re-trigger
+    CUEING_TAIL = "CUEING_TAIL"  # prob dropped, hold cue briefly in case it's a glitch
+    REFRACTORY = "REFRACTORY"    # episode ended, lock out re-trigger (DeFOG terminology)
 
 
 @dataclass
@@ -91,12 +91,29 @@ class CueingControlConfig:
     Defaults: informed by Borzì et al. 2022 episode distribution (50% < 5 s,
     90% < 20 s) and the project's existing 2-state thresholds. All durations
     in frames at the AI's sampling rate (typically 60 Hz), so 30 frames ≈ 500 ms.
+
+    State names follow Vayalet 2026-04-29 convention: "Cueing tail" (still cueing
+    during this state) and "Refractory" (matches DeFOG vocabulary).
     """
     th_high: float = 0.7
     th_low: float = 0.3
-    entry_consec: int = 3          # frames ≥ th_high before IDLE → CUEING
-    tail_frames: int = 30          # frames to hold in TAIL before → COOLDOWN (~500 ms @ 60 Hz)
-    cooldown_frames: int = 60      # frames to lock out after TAIL (~1 s @ 60 Hz)
+    entry_consec: int = 3                 # frames ≥ th_high before IDLE → CUEING
+    cueing_tail_frames: int = 30          # frames to hold in CUEING_TAIL before → REFRACTORY (~500 ms @ 60 Hz)
+    refractory_frames: int = 60           # frames to lock out after CUEING_TAIL (~1 s @ 60 Hz)
+
+    def __init__(self, th_high: float = 0.7, th_low: float = 0.3,
+                 entry_consec: int = 3,
+                 cueing_tail_frames: int | None = None,
+                 refractory_frames: int | None = None,
+                 tail_frames: int | None = None,
+                 cooldown_frames: int | None = None) -> None:
+        # Back-compat: accept legacy kwarg names from older configs/scripts
+        # (`tail_frames` → `cueing_tail_frames`, `cooldown_frames` → `refractory_frames`).
+        self.th_high = th_high
+        self.th_low = th_low
+        self.entry_consec = entry_consec
+        self.cueing_tail_frames = cueing_tail_frames if cueing_tail_frames is not None else (tail_frames if tail_frames is not None else 30)
+        self.refractory_frames = refractory_frames if refractory_frames is not None else (cooldown_frames if cooldown_frames is not None else 60)
 
 
 @dataclass

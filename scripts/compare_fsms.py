@@ -5,9 +5,15 @@ For each weighted subject's TUG trials:
   1. Run Alex's predict_streaming → binary detection at 60 Hz (post-HysteresisFilter)
   2. Feed binary into three controllers:
      - FSM A: DeFOG (Zoetewei 2021) — IDLE → CUEING (10s) → REFRACTORY (5s) → IDLE
-     - FSM B: ours — IDLE → CUEING → TAIL (1s) → COOLDOWN (2s) → IDLE; bounce-back re-fires
+     - FSM B: ours — IDLE → CUEING → CUEING_TAIL (1s) → REFRACTORY (2s) → IDLE; bounce-back re-fires
      - SINGLE: bare threshold pass-through (cue == binary)
   3. Compute clinical metrics per controller per trial vs ground truth.
+
+Note (Vayalet 2026-04-29): the runtime FSM in `hermes/aidfog/utils/types.py` uses
+the state names CUEING_TAIL and REFRACTORY. This script keeps the legacy
+parameter names `tail_frames` / `cooldown_frames` for CSV-column compatibility
+with `reports/fsm_comparison.csv`; they map to `cueing_tail_frames` and
+`refractory_frames` respectively.
 
 Output:
   - reports/fsm_comparison.csv  (per-trial × per-FSM)
@@ -76,12 +82,17 @@ def fsm_a_defog(binary: np.ndarray, cue_frames: int = 10 * TARGET_HZ,
 
 def fsm_b_4state(binary: np.ndarray, tail_frames: int = 60,
                  cooldown_frames: int = 120) -> np.ndarray:
-    """Our 4-state controller: IDLE → CUEING → TAIL → COOLDOWN → IDLE."""
+    """Our 4-state controller: IDLE → CUEING → CUEING_TAIL → REFRACTORY → IDLE.
+
+    Parameter names `tail_frames` / `cooldown_frames` are kept for CSV
+    compatibility; they correspond to `cueing_tail_frames` and
+    `refractory_frames` in the runtime FSM.
+    """
     n = len(binary)
     cue = np.zeros(n, dtype=np.int8)
     state = "IDLE"
-    tail_remaining = 0
-    cooldown_remaining = 0
+    cueing_tail_remaining = 0
+    refractory_remaining = 0
     for t in range(n):
         if state == "IDLE":
             if binary[t] == 1:
@@ -90,20 +101,20 @@ def fsm_b_4state(binary: np.ndarray, tail_frames: int = 60,
         elif state == "CUEING":
             cue[t] = 1
             if binary[t] == 0:
-                state = "TAIL"
-                tail_remaining = tail_frames
-        elif state == "TAIL":
+                state = "CUEING_TAIL"
+                cueing_tail_remaining = tail_frames
+        elif state == "CUEING_TAIL":
             cue[t] = 1
             if binary[t] == 1:
                 state = "CUEING"
             else:
-                tail_remaining -= 1
-                if tail_remaining <= 0:
-                    state = "COOLDOWN"
-                    cooldown_remaining = cooldown_frames
-        elif state == "COOLDOWN":
-            cooldown_remaining -= 1
-            if cooldown_remaining <= 0:
+                cueing_tail_remaining -= 1
+                if cueing_tail_remaining <= 0:
+                    state = "REFRACTORY"
+                    refractory_remaining = cooldown_frames
+        elif state == "REFRACTORY":
+            refractory_remaining -= 1
+            if refractory_remaining <= 0:
                 state = "IDLE"
     return cue
 

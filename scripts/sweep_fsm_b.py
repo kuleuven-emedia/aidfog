@@ -1,9 +1,15 @@
 """
-FSM B Pareto sweep: tail_frames × cooldown_frames vs FSM A (DeFOG) baseline.
+FSM B Pareto sweep: cueing_tail × refractory grid vs FSM A (DeFOG) baseline.
 
-For each (tail_frames, cooldown_frames) point, runs FSM B on every weighted
-LOSO subject's TUG trials, computes per-subject means, and reports the cohort
-mean. FSM A and SINGLE baselines computed once for reference.
+For each (cueing_tail_frames, refractory_frames) point — kept as
+`tail_frames` / `cooldown_frames` in this script's variable and CSV-column
+names for backward compatibility with `reports/fsm_pareto.csv` — runs FSM B
+on every weighted LOSO subject's TUG trials, computes per-subject means, and
+reports the cohort mean. FSM A and SINGLE baselines computed once for reference.
+
+State naming (Vayalet 2026-04-29):
+  - `tail_frames` (here)  ↔ `cueing_tail_frames` (CueState.CUEING_TAIL)
+  - `cooldown_frames` (here) ↔ `refractory_frames` (CueState.REFRACTORY)
 
 Output:
   - reports/fsm_pareto.csv (one row per param point)

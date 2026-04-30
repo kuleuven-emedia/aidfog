@@ -67,8 +67,8 @@ class BudsPipeline(Pipeline):
         self._ctrl = CueingControlConfig(**ctrl_kwargs)
         self._cue_state = CueState.IDLE
         self._consec_high = 0
-        self._tail_remaining = 0
-        self._cooldown_remaining = 0
+        self._cueing_tail_remaining = 0
+        self._refractory_remaining = 0
 
         self._is_ready_event = Event()
         self._is_keep_data_event = Event()
@@ -129,23 +129,25 @@ class BudsPipeline(Pipeline):
     def _process_data(self, topic: str, msg: dict) -> None:
         """4-state cueing FSM driven by upstream AI FoG probability.
 
-        States: IDLE → CUEING → TAIL → COOLDOWN → IDLE.
+        States: IDLE → CUEING → CUEING_TAIL → REFRACTORY → IDLE.
           IDLE: count consecutive high-prob frames; only transition to CUEING
                 after `entry_consec` in a row (rejects noise glitches and the
                 model's input-buffer warmup transient).
           CUEING: send START once on entry; stay here through mid-episode dips
                   (probability may briefly drop below th_low without leaving).
-          TAIL: probability dropped; hold for `tail_frames` before releasing.
-                If probability rises back above th_high, fall back to CUEING.
-          COOLDOWN: send STOP on entry; lock out re-trigger for `cooldown_frames`.
+          CUEING_TAIL: probability dropped; hold for `cueing_tail_frames` before
+                releasing. If probability rises back above th_high, fall back
+                to CUEING. The patient is still being cued in this state.
+          REFRACTORY: send STOP on entry; lock out re-trigger for
+                `refractory_frames` (DeFOG terminology).
 
         TODO (B3, post-2026-04-26): refactor to consume `binary` field from
         Alex's HysteresisFilter once integrated into hermes.aidfog_ai. The
         `th_high` / `th_low` softmax branches drop out (entry/exit debouncing
         is upstream); set `entry_consec=1` to avoid stacking with Alex's
-        `enter_thresh`. TAIL and COOLDOWN remain — they are this FSM's
-        contribution on top of Alex's hysteresis. See VAYALET_FEEDBACK_ACTION_PLAN
-        §A3.5.
+        `enter_thresh`. CUEING_TAIL and REFRACTORY remain — they are this FSM's
+        contribution on top of Alex's hysteresis. See VAYALET_FEEDBACK_2026-04-29
+        §2 for the per-scale separation argument.
         """
         data = msg.get("data", {})
         pytorch_data = data.get("pytorch-worker", {})
@@ -169,11 +171,11 @@ class BudsPipeline(Pipeline):
                 )
         elif self._cue_state == CueState.CUEING:
             if fog_prob < self._ctrl.th_low:
-                self._cue_state = CueState.TAIL
-                self._tail_remaining = self._ctrl.tail_frames
-        elif self._cue_state == CueState.TAIL:
+                self._cue_state = CueState.CUEING_TAIL
+                self._cueing_tail_remaining = self._ctrl.cueing_tail_frames
+        elif self._cue_state == CueState.CUEING_TAIL:
             if fog_prob >= self._ctrl.th_high:
-                # Probability recovered before TAIL expired — restart cue.
+                # Probability recovered before CUEING_TAIL expired — restart cue.
                 # The firmware auto-stops at duration_ms (default 500ms), so
                 # if the dip exceeded that we'd be silent without re-firing.
                 self._cue_state = CueState.CUEING
@@ -181,14 +183,14 @@ class BudsPipeline(Pipeline):
                     {"action": "start", "tone_id": 0, "volume": 80}
                 )
             else:
-                self._tail_remaining -= 1
-                if self._tail_remaining <= 0:
-                    self._cue_state = CueState.COOLDOWN
-                    self._cooldown_remaining = self._ctrl.cooldown_frames
+                self._cueing_tail_remaining -= 1
+                if self._cueing_tail_remaining <= 0:
+                    self._cue_state = CueState.REFRACTORY
+                    self._refractory_remaining = self._ctrl.refractory_frames
                     self._cueing_command_queue.put({"action": "stop"})
-        elif self._cue_state == CueState.COOLDOWN:
-            self._cooldown_remaining -= 1
-            if self._cooldown_remaining <= 0:
+        elif self._cue_state == CueState.REFRACTORY:
+            self._refractory_remaining -= 1
+            if self._refractory_remaining <= 0:
                 self._cue_state = CueState.IDLE
                 self._consec_high = 0
 

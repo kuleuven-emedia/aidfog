@@ -1,5 +1,11 @@
 """
-Thorough FSM A vs FSM B analysis with four corrections to compare_fsms.py:
+Thorough FSM A vs FSM B analysis with four corrections to compare_fsms.py.
+
+Naming note (Vayalet 2026-04-29): runtime FSM uses CUEING_TAIL / REFRACTORY.
+This script keeps `tail_frames` / `cooldown_frames` as parameter and CSV-column
+names for backward compatibility with `reports/fsm_thorough.csv` — they map to
+`cueing_tail_frames` and `refractory_frames` respectively.
+
 
   #1  Joint sweep: DeFOG's cue_frames and refractory_frames are parameters too,
       not fixed at Zoetewei 2021's published 10s + 5s.
@@ -68,13 +74,13 @@ def fsm_a_defog_traced(binary: np.ndarray, cue_frames: int, refractory_frames: i
 
 
 def fsm_b_4state_traced(binary: np.ndarray, tail_frames: int, cooldown_frames: int):
-    """4-state controller; also returns per-frame IDLE flag."""
+    """4-state controller (IDLE → CUEING → CUEING_TAIL → REFRACTORY); returns per-frame IDLE flag."""
     n = len(binary)
     cue = np.zeros(n, dtype=np.int8)
     is_idle = np.ones(n, dtype=bool)
     state = "IDLE"
-    tail_remaining = 0
-    cooldown_remaining = 0
+    cueing_tail_remaining = 0
+    refractory_remaining = 0
     for t in range(n):
         is_idle[t] = (state == "IDLE")
         if state == "IDLE":
@@ -84,20 +90,20 @@ def fsm_b_4state_traced(binary: np.ndarray, tail_frames: int, cooldown_frames: i
         elif state == "CUEING":
             cue[t] = 1
             if binary[t] == 0:
-                state = "TAIL"
-                tail_remaining = tail_frames
-        elif state == "TAIL":
+                state = "CUEING_TAIL"
+                cueing_tail_remaining = tail_frames
+        elif state == "CUEING_TAIL":
             cue[t] = 1
             if binary[t] == 1:
                 state = "CUEING"
             else:
-                tail_remaining -= 1
-                if tail_remaining <= 0:
-                    state = "COOLDOWN"
-                    cooldown_remaining = cooldown_frames
-        elif state == "COOLDOWN":
-            cooldown_remaining -= 1
-            if cooldown_remaining <= 0:
+                cueing_tail_remaining -= 1
+                if cueing_tail_remaining <= 0:
+                    state = "REFRACTORY"
+                    refractory_remaining = cooldown_frames
+        elif state == "REFRACTORY":
+            refractory_remaining -= 1
+            if refractory_remaining <= 0:
                 state = "IDLE"
     return cue, is_idle
 
