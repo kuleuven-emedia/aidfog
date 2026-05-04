@@ -39,6 +39,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from hermes.aidfog_ai.model_alex.streaming import predict_streaming  # noqa: E402
+from hermes.aidfog_ai.model_alex.metrics import segment_f1_score  # noqa: E402
 from evaluate_loso import list_trials, load_trial, runs, TARGET_HZ  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -224,6 +225,14 @@ def cue_metrics_thorough(cue: np.ndarray, gt: np.ndarray, is_idle: np.ndarray,
     out["onset_all_median_s"] = float(np.median(onsets_all)) if onsets_all else float("nan")
     out["onset_idle_median_s"] = float(np.median(onsets_idle)) if onsets_idle else float("nan")
     out["n_episodes_idle_entry"] = len(onsets_idle)
+
+    # ── Alex's segment-F1 (Vayalet 2026-04-29 §3b) ────────────────────────
+    # Use Alex's exact function so cueing-side F1 matches model-side F1
+    # methodologically. Note: scores both label classes (lineage from Juha's
+    # implementation, confirmed by Alex 2026-05-04). See
+    # hermes/aidfog_ai/model_alex/metrics.py for the methodology note.
+    f1_iou50, _, _, _ = segment_f1_score(cue, gt, overlap=0.5)
+    out["f1_segment_alex"] = float(f1_iou50)
 
     return out
 
