@@ -62,6 +62,9 @@ def main():
     ap.add_argument("--fsmb-tail-grid", default="0,30,60,120,180,300,600")
     ap.add_argument("--fsmb-cool-grid", default="0,60,120,300")
     ap.add_argument("--out", default="reports/full_pareto.csv")
+    ap.add_argument("--per-subject-out", default="reports/full_pareto_per_subject.csv",
+                    help="Per-subject means (one row per (config, subject)) for "
+                         "paired-subject delta analysis (Vayalet 2026-04-29 §3a).")
     args = ap.parse_args()
 
     task_filter = None if args.task.lower() == "all" else args.task
@@ -140,6 +143,7 @@ def main():
         return out
 
     rows = []
+    per_subject_rows = []  # one row per (config, subject) for paired-delta analysis
     for (enter, exit_t), bs in binaries.items():
         for label, kind, p1, p2, fn in make_controllers():
             by_subj = defaultdict(list)
@@ -155,7 +159,22 @@ def main():
                 row[k] = mu
                 row[k + "_sd"] = sd
             rows.append(row)
-    print(f"  computed {len(rows)} configurations\n")
+
+            # Per-subject means: average each metric across this subject's trials.
+            # Lets paired-subject analysis (each subject as own control) tighten
+            # the SDs from the inflated inter-subject cohort SD.
+            for subj, ms in by_subj.items():
+                if not ms:
+                    continue
+                subj_means = {k: nanmean([m[k] for m in ms])
+                              for k in ms[0] if isinstance(ms[0][k], float)}
+                ps_row = dict(enter_thresh=enter, exit_thresh=exit_t,
+                              label=label, kind=kind, p1=p1, p2=p2,
+                              subject=subj, n_trials=len(ms))
+                ps_row.update(subj_means)
+                per_subject_rows.append(ps_row)
+    print(f"  computed {len(rows)} configurations "
+          f"({len(per_subject_rows)} per-subject rows)\n")
 
     # ── Print analysis ────────────────────────────────────────────────────
     valid = [r for r in rows if r.get("sens_iou50") == r.get("sens_iou50")]
@@ -232,7 +251,7 @@ def main():
               f"{r['in_fog_ratio']:6.2f} {r['fp_density']:7.4f}")
     print(f"\n{len(front)} non-dominated configurations on Pareto front.")
 
-    # CSV
+    # CSV — cohort
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     if rows:
         keys = list(rows[0].keys())
@@ -242,6 +261,23 @@ def main():
             for r in rows:
                 w.writerow(r)
         print(f"\nWrote {len(rows)} configs to {args.out}")
+
+    # CSV — per-subject (for paired-subject delta analysis)
+    if per_subject_rows:
+        # Union of all keys to handle metrics that vary across config kinds.
+        all_keys = []
+        seen = set()
+        for r in per_subject_rows:
+            for k in r:
+                if k not in seen:
+                    seen.add(k)
+                    all_keys.append(k)
+        with open(args.per_subject_out, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=all_keys)
+            w.writeheader()
+            for r in per_subject_rows:
+                w.writerow(r)
+        print(f"Wrote {len(per_subject_rows)} per-subject rows to {args.per_subject_out}")
 
 
 if __name__ == "__main__":
