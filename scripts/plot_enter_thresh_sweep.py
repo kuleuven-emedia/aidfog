@@ -38,7 +38,11 @@ METRICS = [
     ("sens_iou50", "Sensitivity (IoU≥50)", 100, "%"),
     ("ppv_iou50", "PPV (IoU≥50)", 100, "%"),
     ("f1_segment_alex", "F1 (Alex segment, IoU≥50)", 1, ""),
-    ("fp_density", "Wasted-audio fraction", 1, ""),
+    # Renamed 2026-05-04 from "Wasted-audio fraction" — see
+    # scripts/analyze_fsm_thorough.py module docstring for the literature
+    # rationale. CSV column is `extended_cueing_fraction`; for back-compat
+    # also try `fp_density` as fallback when reading older reports.
+    ("extended_cueing_fraction", "Extended cueing fraction\n(out-of-FoG / non-FoG time)", 1, ""),
     ("in_fog_ratio", "In-FoG ratio (cue covers freeze)", 1, ""),
 ]
 
@@ -66,7 +70,14 @@ def main():
 
     def col(r, k, default=float("nan")):
         v = r.get(k, "")
-        if v in ("", "nan"):
+        # Back-compat: extended_cueing_fraction was previously fp_density.
+        if (v in ("", "nan", None)) and k == "extended_cueing_fraction":
+            v = r.get("fp_density", "")
+        if (v in ("", "nan", None)) and k.endswith("_sd"):
+            base = k[:-3]
+            if base == "extended_cueing_fraction":
+                v = r.get("fp_density_sd", "")
+        if v in ("", "nan", None):
             return default
         return float(v)
 

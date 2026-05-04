@@ -14,8 +14,18 @@ names for backward compatibility with `reports/fsm_thorough.csv` — they map to
   #3  Onset delay only on episodes that begin while the FSM is in IDLE
       (mid-cue carryover doesn't count as "fast onset").
   #5  Cue-efficiency decomposed into:
-        - in_fog_ratio  = in-FoG cue time / total FoG time     (overshoot)
-        - fp_density   = out-of-FoG cue time / non-FoG time   (false-alarm density)
+        - in_fog_ratio              = in-FoG cue time / total FoG time
+        - extended_cueing_fraction  = out-of-FoG cue time / non-FoG time
+          (Renamed 2026-05-04 from `fp_density`. The earlier name carried a
+          value judgement — "false-alarm" / "wasted audio" — that the cueing
+          literature does not support at our 1–10 s cue-duration resolution.
+          Bächlin 2010, Zoetewei 2024, and Ginis 2018 confirm over-cueing is
+          a real clinical concern; Suteerawattananon 2004 and Ginis 2018
+          confirm a brain-substitute mechanism that may justify sustained
+          cueing; no paper establishes dose-response in the 1–10 s window.
+          The neutral name lets the data speak. See thesis/citations_to_chase.md
+          §13a–§13b. The CSV column `fp_density` is preserved as an alias
+          for backward compatibility with reports written before this date.)
 
 Output:
   - reports/fsm_thorough.csv
@@ -181,7 +191,12 @@ def cue_metrics_thorough(cue: np.ndarray, gt: np.ndarray, is_idle: np.ndarray,
     out_fog_cue_seconds = float(((cue == 1) & (gt == 0)).sum()) / sampling_hz
 
     in_fog_ratio = in_fog_cue_seconds / fog_seconds if fog_seconds > 0 else float("nan")
-    fp_density = out_fog_cue_seconds / nonfog_seconds if nonfog_seconds > 0 else float("nan")
+    # Renamed 2026-05-04 from `fp_density` (see module docstring for rationale).
+    # `fp_density` kept as alias column for backward compatibility with reports
+    # generated before the rename.
+    extended_cueing_fraction = (
+        out_fog_cue_seconds / nonfog_seconds if nonfog_seconds > 0 else float("nan")
+    )
     cue_pct = 100.0 * (cue == 1).sum() / n if n else 0.0
     pct_tf = 100.0 * (gt == 1).sum() / n if n else 0.0
 
@@ -191,7 +206,9 @@ def cue_metrics_thorough(cue: np.ndarray, gt: np.ndarray, is_idle: np.ndarray,
                fog_seconds=fog_seconds, nonfog_seconds=nonfog_seconds,
                in_fog_cue_seconds=in_fog_cue_seconds,
                out_fog_cue_seconds=out_fog_cue_seconds,
-               in_fog_ratio=in_fog_ratio, fp_density=fp_density)
+               in_fog_ratio=in_fog_ratio,
+               extended_cueing_fraction=extended_cueing_fraction,
+               fp_density=extended_cueing_fraction)  # alias for back-compat
 
     for mode in ("any", "iou50"):
         matched_gt, matched_cue, ppv_tp = match_events(gt_events, cue_events, mode)
