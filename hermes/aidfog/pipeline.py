@@ -127,42 +127,25 @@ class BudsPipeline(Pipeline):
         self._is_keep_data_event.set()
 
     def _process_data(self, topic: str, msg: dict) -> None:
-        """4-state cueing FSM driven by upstream AI FoG probability.
+        """4-state cueing FSM driven by Alex's post-hysteresis binary stream.
 
         States: IDLE → CUEING → CUEING_TAIL → REFRACTORY → IDLE.
-          IDLE: count consecutive high-prob frames; only transition to CUEING
-                after `entry_consec` in a row (rejects noise glitches and the
-                model's input-buffer warmup transient).
-          CUEING: send START once on entry; stay here through mid-episode dips
-                  (probability may briefly drop below th_low without leaving).
-          CUEING_TAIL: probability dropped; hold for `cueing_tail_frames` before
-                releasing. If probability rises back above th_high, fall back
-                to CUEING. The patient is still being cued in this state.
+          IDLE: enter CUEING immediately on binary==1 (Alex's HysteresisFilter
+                upstream already does the entry debouncing — `entry_consec`
+                defaults to 1 to avoid stacking another debounce).
+          CUEING: send START once on entry; remain while binary==1.
+          CUEING_TAIL: binary dropped to 0; hold for `cueing_tail_frames` before
+                releasing. If binary rises back to 1, fall back to CUEING. The
+                patient is still being cued in this state.
           REFRACTORY: send STOP on entry; lock out re-trigger for
                 `refractory_frames` (DeFOG terminology).
-
-        TODO (B3, post-2026-04-26): refactor to consume `binary` field from
-        Alex's HysteresisFilter once integrated into hermes.aidfog_ai. The
-        `th_high` / `th_low` softmax branches drop out (entry/exit debouncing
-        is upstream); set `entry_consec=1` to avoid stacking with Alex's
-        `enter_thresh`. CUEING_TAIL and REFRACTORY remain — they are this FSM's
-        contribution on top of Alex's hysteresis. See VAYALET_FEEDBACK_2026-04-29
-        §2 for the per-scale separation argument.
         """
         data = msg.get("data", {})
         pytorch_data = data.get("pytorch-worker", {})
-        logits = pytorch_data.get("logits", [0.0, 0.0])
-        # Softmax so th_high / th_low are bounded in [0, 1] — matches the
-        # offline simulator in scripts/compare_fsm_strategies.py.
-        lg = np.asarray(logits, dtype=np.float64)
-        shifted = lg - lg.max()
-        ex = np.exp(shifted)
-        fog_prob = float((ex / ex.sum())[1])
+        binary = int(pytorch_data.get("binary", 0))
 
         if self._cue_state == CueState.IDLE:
-            self._consec_high = (
-                self._consec_high + 1 if fog_prob >= self._ctrl.th_high else 0
-            )
+            self._consec_high = self._consec_high + 1 if binary == 1 else 0
             if self._consec_high >= self._ctrl.entry_consec:
                 self._cue_state = CueState.CUEING
                 self._consec_high = 0
@@ -170,14 +153,14 @@ class BudsPipeline(Pipeline):
                     {"action": "start", "tone_id": 0, "volume": 80}
                 )
         elif self._cue_state == CueState.CUEING:
-            if fog_prob < self._ctrl.th_low:
+            if binary == 0:
                 self._cue_state = CueState.CUEING_TAIL
                 self._cueing_tail_remaining = self._ctrl.cueing_tail_frames
         elif self._cue_state == CueState.CUEING_TAIL:
-            if fog_prob >= self._ctrl.th_high:
-                # Probability recovered before CUEING_TAIL expired — restart cue.
-                # The firmware auto-stops at duration_ms (default 500ms), so
-                # if the dip exceeded that we'd be silent without re-firing.
+            if binary == 1:
+                # Hysteresis re-asserted FoG before CUEING_TAIL expired —
+                # restart cue. Firmware auto-stops at duration_ms (default
+                # 500 ms); without re-firing we'd go silent on long dips.
                 self._cue_state = CueState.CUEING
                 self._cueing_command_queue.put(
                     {"action": "start", "tone_id": 0, "volume": 80}

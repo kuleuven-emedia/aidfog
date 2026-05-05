@@ -97,12 +97,12 @@ class CueingControlConfig:
     """
     th_high: float = 0.7
     th_low: float = 0.3
-    entry_consec: int = 3                 # frames ≥ th_high before IDLE → CUEING
+    entry_consec: int = 1                 # frames with binary==1 before IDLE → CUEING (Alex's HysteresisFilter already debounces; default 1 to avoid stacking)
     cueing_tail_frames: int = 30          # frames to hold in CUEING_TAIL before → REFRACTORY (~500 ms @ 60 Hz)
     refractory_frames: int = 60           # frames to lock out after CUEING_TAIL (~1 s @ 60 Hz)
 
     def __init__(self, th_high: float = 0.7, th_low: float = 0.3,
-                 entry_consec: int = 3,
+                 entry_consec: int = 1,
                  cueing_tail_frames: int | None = None,
                  refractory_frames: int | None = None,
                  tail_frames: int | None = None,

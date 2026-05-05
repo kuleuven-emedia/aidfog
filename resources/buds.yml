@@ -81,7 +81,15 @@ pipeline_specs:
   - package: "aidfog_ai"
     class: "TorchPipeline"
     settings:
-      model_path: "./resources/tcn_model_60fps.pth"
+      # Alex's LOSOCV weights live at hermes/aidfog_ai/model_alex/weights/subject{id}.pt.
+      # Available subject IDs: 001, 004, 007, 009, 010, 011, 013, 015, 029, 030.
+      # The chosen ID MUST match the subject being replayed (LOSOCV: this model
+      # was trained with that subject held out, so it is the only valid one for
+      # evaluating that subject).
+      subject_id: "001"
+      enter_thresh: 20      # consecutive 1s for HysteresisFilter to enter FoG (Alex's default)
+      exit_thresh: 5        # consecutive 0s to exit FoG (Alex's default)
+      thresh: 0.5           # sigmoid → binary threshold (Alex's default)
       input_size: [5, 6]
       output_classes: ["no_fog", "fog"]
       sampling_rate_hz: 60
@@ -102,10 +110,8 @@ pipeline_specs:
             left:  "12:34:56:C2:A2:31"
           sampling_rate_hz: 100
           dt: 0.5            # BudsHandler status poll period (seconds); 100Hz polling destabilised BLE on Windows
-          cueing_control:    # 4-state FSM parameters (IDLE → CUEING → CUEING_TAIL → REFRACTORY); see utils/types.py:CueingControlConfig
-            th_high: 0.7
-            th_low: 0.3
-            entry_consec: 3                # IDLE→CUEING requires 3 consecutive high-prob frames (rejects startup transient + glitches)
+          cueing_control:    # 4-state FSM consuming Alex's binary stream; see utils/types.py:CueingControlConfig
+            entry_consec: 1                # 1 frame with binary==1 enters CUEING (Alex's HysteresisFilter already debounces upstream)
             cueing_tail_frames: 30         # ~500 ms @ 60 Hz — hold cue through mid-episode dips before releasing (CUEING_TAIL state)
             refractory_frames: 60          # ~1 s @ 60 Hz — lock out re-trigger after episode ends (REFRACTORY state, DeFOG terminology)
       stream_in_specs:
