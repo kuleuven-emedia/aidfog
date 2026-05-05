@@ -69,6 +69,24 @@ def main():
                     best = cur
             print(f"  longest run with fog_prob >= 0.3: {best} consecutive frames")
 
+        # Ground-truth FoG label distribution from the replay producer.
+        try:
+            labels = f["aidfog_replay/dots-imu/fog_label"][...]
+            labels = np.squeeze(labels).astype(np.int32)
+            n = labels.size
+            n_fog = int((labels == 1).sum())
+            print(f"\nGround-truth fog_label: n={n}  fog_frames={n_fog} ({100.0*n_fog/max(n,1):.1f}%)")
+            if n_fog > 0:
+                # Longest consecutive FoG run in ground truth.
+                best = cur = 0
+                for v in labels == 1:
+                    cur = cur + 1 if v else 0
+                    if cur > best:
+                        best = cur
+                print(f"  longest GT FoG segment: {best} consecutive frames ({best/60:.2f} s @ 60 Hz)")
+        except KeyError:
+            print("\nNo fog_label dataset found.")
+
 
 if __name__ == "__main__":
     main()
