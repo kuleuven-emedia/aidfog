@@ -14,17 +14,11 @@ The HDF5 must contain both /aidfog_replay/dots-imu/{acceleration,gyroscope,fog_l
 """
 
 import argparse
-import os
-import sys
 
 import h5py
 import numpy as np
 
-# Make hermes/aidfog_ai/model_alex importable as a top-level package.
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(ROOT, "hermes", "aidfog_ai"))
-
-from model_alex.streaming import predict_streaming  # noqa: E402
+from hermes.aidfog_ai.model_alex.streaming import predict_streaming
 
 
 def longest_run(mask: np.ndarray) -> int:
